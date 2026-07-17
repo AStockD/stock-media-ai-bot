@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api, type CookieStatus, type LoginStartResponse } from './api/client';
+import { platformApi, type UserInfo, type PlatformAccount } from './api/client';
+import Login from './pages/Login';
+import Register from './pages/Register';
 import './App.css';
 
-type PlatformId = 'xueqiu';
+type Page = 'login' | 'register' | 'dashboard';
 
 interface PlatformInfo {
-  id: PlatformId;
+  id: string;
   name: string;
   icon: string;
   color: string;
@@ -15,99 +17,140 @@ const PLATFORMS: PlatformInfo[] = [
   { id: 'xueqiu', name: '雪球', icon: '❄️', color: '#2196F3' },
 ];
 
+function loadAuth(): { token: string; user: UserInfo } | null {
+  try {
+    const t = localStorage.getItem('smab_token');
+    const u = localStorage.getItem('smab_user');
+    if (t && u) return { token: t, user: JSON.parse(u) };
+  } catch { /* ignore */ }
+  return null;
+}
+
 export default function App() {
-  const [cookieStatus, setCookieStatus] = useState<CookieStatus | null>(null);
-  const [loginActive, setLoginActive] = useState(false);
+  const [page, setPage] = useState<Page>(() => loadAuth() ? 'dashboard' : 'login');
+  const [token, setToken] = useState<string>(() => loadAuth()?.token || '');
+  const [user, setUser] = useState<UserInfo | null>(() => loadAuth()?.user || null);
+  const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
+  const [selectedPlatform, setSelectedPlatform] = useState('xueqiu');
   const [qrImage, setQrImage] = useState('');
   const [loginMsg, setLoginMsg] = useState('');
-  const [selectedPlatform, setSelectedPlatform] = useState<PlatformId>('xueqiu');
+  const [loginActive, setLoginActive] = useState(false);
+  const [postContent, setPostContent] = useState('');
+  const [postMsg, setPostMsg] = useState('');
 
-  const fetchCookieStatus = useCallback(async () => {
+  const handleLogin = (t: string, u: UserInfo) => {
+    localStorage.setItem('smab_token', t);
+    localStorage.setItem('smab_user', JSON.stringify(u));
+    setToken(t);
+    setUser(u);
+    setPage('dashboard');
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('smab_token');
+    localStorage.removeItem('smab_user');
+    setToken('');
+    setUser(null);
+    setPage('login');
+    setAccounts([]);
+  };
+
+  const fetchAccounts = useCallback(async () => {
+    if (!token) return;
     try {
-      const status = await api.cookieStatus();
-      setCookieStatus(status);
-    } catch {
-      // ignore
-    }
-  }, []);
+      const resp = await platformApi.getAccounts(token);
+      setAccounts(resp.accounts);
+    } catch { /* ignore */ }
+  }, [token]);
 
   useEffect(() => {
-    fetchCookieStatus();
-  }, [fetchCookieStatus]);
+    if (page === 'dashboard') fetchAccounts();
+  }, [page, fetchAccounts]);
+
+  function getAccountStatus(platform: string): PlatformAccount | undefined {
+    return accounts.find(a => a.platform === platform);
+  }
 
   async function handleStartLogin() {
     setLoginActive(true);
     setQrImage('');
-    setLoginMsg('正在启动浏览器...');
-
+    setLoginMsg('Starting browser...');
     try {
-      // Cancel any existing session first
-      await api.cancelLogin();
+      await platformApi.cancelLogin(selectedPlatform, token);
       await new Promise(r => setTimeout(r, 500));
-
-      const resp: LoginStartResponse = await api.startLogin();
-
+      const resp = await platformApi.startLogin(selectedPlatform, token);
       if (resp.status === 'waiting_for_scan' && resp.qr_image) {
         setQrImage(resp.qr_image);
-        setLoginMsg(resp.message || '请使用雪球APP扫描二维码登录');
+        setLoginMsg(resp.message || 'Please scan QR code');
         pollLoginStatus();
       } else if (resp.status === 'error') {
-        setLoginMsg(`错误: ${resp.error || '未知错误'}`);
+        setLoginMsg(`Error: ${resp.error || 'Unknown'}`);
         setLoginActive(false);
       } else {
         setLoginMsg(resp.message || resp.status);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setLoginMsg(`错误: ${msg}`);
+      setLoginMsg(`Error: ${err instanceof Error ? err.message : String(err)}`);
       setLoginActive(false);
     }
   }
 
   async function pollLoginStatus() {
-    const maxAttempts = 120;
-    for (let i = 0; i < maxAttempts; i++) {
+    for (let i = 0; i < 120; i++) {
       await new Promise(r => setTimeout(r, 1000));
       try {
-        const data = await api.loginStatus();
-
+        const data = await platformApi.loginStatus(selectedPlatform, token);
         if (data.status === 'success') {
-          setLoginMsg(`登录成功! 已保存 ${data.cookie_count} 个 Cookie`);
+          setLoginMsg(`Login success! ${data.cookie_count} cookies saved`);
           setQrImage('');
           setLoginActive(false);
-          fetchCookieStatus();
+          fetchAccounts();
           return;
         } else if (data.status === 'timeout') {
-          setLoginMsg('登录超时，请重试');
+          setLoginMsg('Login timeout, please retry');
           setQrImage('');
           setLoginActive(false);
           return;
         } else if (data.status === 'error') {
-          setLoginMsg(`错误: ${data.error || '未知错误'}`);
+          setLoginMsg(`Error: ${data.error || 'Unknown'}`);
           setQrImage('');
           setLoginActive(false);
           return;
         }
-      } catch {
-        // ignore polling errors
-      }
+      } catch { /* ignore */ }
     }
-    setLoginMsg('登录超时');
+    setLoginMsg('Login timeout');
     setLoginActive(false);
   }
 
   async function handleCancelLogin() {
-    try {
-      await api.cancelLogin();
-    } catch {
-      // ignore
-    }
+    try { await platformApi.cancelLogin(selectedPlatform, token); } catch { /* ignore */ }
     setLoginActive(false);
     setQrImage('');
     setLoginMsg('');
   }
 
+  async function handlePost() {
+    if (!postContent.trim()) return;
+    setPostMsg('Posting...');
+    try {
+      const resp = await platformApi.createPost(selectedPlatform, postContent, token);
+      setPostMsg(resp.success ? `Posted! ${resp.url || ''}` : `Failed: ${resp.error}`);
+      if (resp.success) setPostContent('');
+    } catch (err: unknown) {
+      setPostMsg(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (page === 'login') {
+    return <Login onLogin={handleLogin} onSwitchToRegister={() => setPage('register')} />;
+  }
+  if (page === 'register') {
+    return <Register onLogin={handleLogin} onSwitchToLogin={() => setPage('login')} />;
+  }
+
   const platform = PLATFORMS.find(p => p.id === selectedPlatform)!;
+  const accountStatus = getAccountStatus(selectedPlatform);
 
   return (
     <div className="app">
@@ -117,30 +160,34 @@ export default function App() {
           <h1>Stock Media AI Bot</h1>
         </div>
         <div className="header-right">
-          {cookieStatus?.valid && (
-            <span className="cookie-badge">
-              <span className="cookie-dot" />
-              已登录 · {cookieStatus.cookie_count} cookies
-            </span>
-          )}
+          <span className="user-badge">{user?.username}</span>
+          <button className="btn btn-outline btn-sm" onClick={handleLogout}>Logout</button>
         </div>
       </header>
 
       <main className="main">
         <section className="platforms-section">
-          <h2>媒体平台</h2>
+          <h2>Platforms</h2>
           <div className="platforms-grid">
-            {PLATFORMS.map(p => (
-              <div
-                key={p.id}
-                className={`platform-card ${selectedPlatform === p.id ? 'selected' : ''}`}
-                onClick={() => setSelectedPlatform(p.id)}
-                style={{ '--platform-color': p.color } as React.CSSProperties}
-              >
-                <span className="platform-icon">{p.icon}</span>
-                <span className="platform-name">{p.name}</span>
-              </div>
-            ))}
+            {PLATFORMS.map(p => {
+              const acc = getAccountStatus(p.id);
+              return (
+                <div
+                  key={p.id}
+                  className={`platform-card ${selectedPlatform === p.id ? 'selected' : ''}`}
+                  onClick={() => { setSelectedPlatform(p.id); setQrImage(''); setLoginMsg(''); }}
+                  style={{ '--platform-color': p.color } as React.CSSProperties}
+                >
+                  <span className="platform-icon">{p.icon}</span>
+                  <div>
+                    <span className="platform-name">{p.name}</span>
+                    <span className={`platform-status ${acc?.is_valid ? 'status-ok' : 'status-warn'}`}>
+                      {acc?.is_valid ? 'Connected' : 'Not connected'}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -149,38 +196,29 @@ export default function App() {
             <div className="login-header">
               <span className="login-platform-icon">{platform.icon}</span>
               <div>
-                <h3>{platform.name} 账号管理</h3>
+                <h3>{platform.name} Account</h3>
                 <p className="login-sub">
-                  {cookieStatus?.valid
-                    ? `上次更新: ${new Date(cookieStatus.last_updated!).toLocaleString('zh-CN')} (${cookieStatus.cookie_count} cookies)`
-                    : '尚未登录'}
+                  {accountStatus?.is_valid
+                    ? `Last updated: ${new Date(accountStatus.last_updated!).toLocaleString()} (${accountStatus.cookie_count} cookies)`
+                    : 'Not connected'}
                 </p>
               </div>
             </div>
-
             <div className="login-body">
               {qrImage ? (
                 <div className="qr-area">
                   <img src={qrImage} alt="QR Code" className="qr-image" />
                   <p className="qr-hint">{loginMsg}</p>
                   <div className="qr-actions">
-                    <button className="btn btn-secondary" onClick={handleStartLogin}>
-                      刷新二维码
-                    </button>
-                    <button className="btn btn-outline" onClick={handleCancelLogin}>
-                      取消
-                    </button>
+                    <button className="btn btn-secondary" onClick={handleStartLogin}>Refresh</button>
+                    <button className="btn btn-outline" onClick={handleCancelLogin}>Cancel</button>
                   </div>
                 </div>
               ) : (
                 <div className="login-action-area">
-                  <p className="login-msg">{loginMsg || '点击下方按钮启动扫码登录'}</p>
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleStartLogin}
-                    disabled={loginActive}
-                  >
-                    {loginActive ? '登录中...' : '开始扫码登录'}
+                  <p className="login-msg">{loginMsg || 'Click to start QR code login'}</p>
+                  <button className="btn btn-primary" onClick={handleStartLogin} disabled={loginActive}>
+                    {loginActive ? 'Logging in...' : 'Scan QR to Login'}
                   </button>
                 </div>
               )}
@@ -188,33 +226,20 @@ export default function App() {
           </div>
         </section>
 
-        <section className="status-section">
-          <h2>Cookie 状态</h2>
-          <div className="status-card">
-            <div className="status-row">
-              <span className="status-label">平台</span>
-              <span className="status-value">{platform.icon} {platform.name}</span>
-            </div>
-            <div className="status-row">
-              <span className="status-label">状态</span>
-              <span className={`status-value ${cookieStatus?.valid ? 'status-ok' : 'status-warn'}`}>
-                {cookieStatus?.valid ? '有效' : '未登录'}
-              </span>
-            </div>
-            {cookieStatus?.valid && (
-              <>
-                <div className="status-row">
-                  <span className="status-label">Cookie 数量</span>
-                  <span className="status-value">{cookieStatus.cookie_count}</span>
-                </div>
-                <div className="status-row">
-                  <span className="status-label">更新时间</span>
-                  <span className="status-value">
-                    {new Date(cookieStatus.last_updated!).toLocaleString('zh-CN')}
-                  </span>
-                </div>
-              </>
-            )}
+        <section className="post-section">
+          <h2>Create Post</h2>
+          <div className="post-card">
+            <textarea
+              className="post-textarea"
+              placeholder={`Write something to post on ${platform.name}...`}
+              value={postContent}
+              onChange={e => setPostContent(e.target.value)}
+              rows={4}
+            />
+            {postMsg && <p className="post-msg">{postMsg}</p>}
+            <button className="btn btn-primary" onClick={handlePost} disabled={!postContent.trim()}>
+              Post to {platform.name}
+            </button>
           </div>
         </section>
       </main>

@@ -6,10 +6,18 @@ services:
     container_name: smab-backend
     ports:
       - "8002:8000"
+    environment:
+      - DB_HOST=mysql8
+      - DB_PORT=3306
+      - DB_USER=smab
+      - DB_PASSWORD=smab_pass_2026
+      - DB_NAME=smab
+      - JWT_SECRET=smab-prod-secret-change-me
     volumes:
       - ./backend/data:/app/data
     networks:
       - smab
+      - mysql_net
     restart: unless-stopped
 
   frontend:
@@ -28,5 +36,8 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.23.0.0/16
-          gateway: 172.23.0.1
+        - subnet: 172.29.0.0/16
+          gateway: 172.29.0.1
+  mysql_net:
+    external: true
+    name: mysql_mysql-network

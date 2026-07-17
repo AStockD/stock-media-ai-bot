@@ -2,42 +2,31 @@ import base64
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException
 
-from app.models.schemas import CookieImportRequest, CookieStatusResponse
-from app.services.cookie_manager import CookieManager
+from app.auth import get_current_user
+from app.services.account_manager import AccountManager, account_manager
 from app.services.xueqiu_login_service import get_login_service
-from app.services.xueqiu_post_service import get_post_service
-from app.services.xueqiu_comment_service import get_comment_service
+from app.services.xueqiu_post_service import XueqiuPostService
+from app.services.xueqiu_comment_service import XueqiuCommentService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/platform", tags=["platform"])
 
-cookie_mgr = CookieManager()
+post_service = XueqiuPostService(account_manager)
+comment_service = XueqiuCommentService(account_manager)
 
 
-@router.post("/cookie")
-async def import_cookie(req: CookieImportRequest):
-    count = cookie_mgr.import_cookies(req.cookie_string)
-    return {"success": True, "cookie_count": count, "message": f"Imported {count} cookies"}
+@router.get("/accounts")
+async def list_accounts(user: dict = Depends(get_current_user)):
+    accounts = account_manager.get_accounts(user["id"])
+    return {"accounts": accounts}
 
 
-@router.get("/cookie/status", response_model=CookieStatusResponse)
-async def cookie_status():
-    if not cookie_mgr.has_cookies:
-        return CookieStatusResponse(valid=False, cookie_count=0)
-    return CookieStatusResponse(
-        valid=True,
-        last_updated=cookie_mgr.last_updated,
-        cookie_count=cookie_mgr.cookie_count,
-    )
-
-
-@router.post("/xueqiu/login/start")
-async def start_login():
-    login_svc = get_login_service(cookie_mgr)
-    result = await login_svc.start_login()
+@router.post("/{platform}/login/start")
+async def start_login(platform: str, user: dict = Depends(get_current_user)):
+    login_svc = get_login_service(account_manager)
+    result = await login_svc.start_login(user["id"], platform)
 
     if result.get("status") == "waiting_for_scan" and "screenshot" in result:
         screenshot_path = result["screenshot"]
@@ -47,48 +36,51 @@ async def start_login():
             return {
                 "status": result["status"],
                 "qr_image": f"data:image/png;base64,{img_base64}",
-                "message": result.get("message", "")
+                "message": result.get("message", ""),
             }
 
     return result
 
 
-@router.get("/xueqiu/login/status")
-async def login_status():
-    login_svc = get_login_service(cookie_mgr)
-    return await login_svc.get_status()
+@router.get("/{platform}/login/status")
+async def login_status(platform: str, user: dict = Depends(get_current_user)):
+    login_svc = get_login_service(account_manager)
+    return await login_svc.get_status(user["id"], platform)
 
 
-@router.post("/xueqiu/login/cancel")
-async def cancel_login():
-    login_svc = get_login_service(cookie_mgr)
-    return await login_svc.cancel_login()
+@router.post("/{platform}/login/cancel")
+async def cancel_login(platform: str, user: dict = Depends(get_current_user)):
+    login_svc = get_login_service(account_manager)
+    return await login_svc.cancel_login(user["id"], platform)
 
 
-@router.post("/xueqiu/post")
-async def create_post(req: dict):
+@router.post("/{platform}/post")
+async def create_post(platform: str, req: dict, user: dict = Depends(get_current_user)):
     content = req.get("content")
     image_path = req.get("image_path")
     image_url = req.get("image_url")
     if not content:
-        from fastapi import HTTPException
         raise HTTPException(400, "content is required")
-    post_svc = get_post_service()
-    return await post_svc.create_post(content, image_path=image_path, image_url=image_url)
+    return await post_service.create_post(
+        user_id=user["id"],
+        content=content,
+        image_path=image_path,
+        image_url=image_url,
+        platform=platform,
+    )
 
 
-@router.post("/xueqiu/comment")
-async def create_comment(req: dict):
+@router.post("/{platform}/comment")
+async def create_comment(platform: str, req: dict, user: dict = Depends(get_current_user)):
     post_id = req.get("post_id")
     content = req.get("content")
-    user_id = req.get("user_id")
     reply_to_comment_id = req.get("reply_to_comment_id")
     if not post_id or not content:
-        from fastapi import HTTPException
         raise HTTPException(400, "post_id and content are required")
-    comment_svc = get_comment_service()
-    return await comment_svc.create_comment(
-        int(post_id), content,
-        user_id=user_id,
+    return await comment_service.create_comment(
+        user_id=user["id"],
+        post_id=int(post_id),
+        content=content,
+        platform=platform,
         reply_to_comment_id=int(reply_to_comment_id) if reply_to_comment_id else None,
     )
