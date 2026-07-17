@@ -59,6 +59,28 @@ export interface LoginStatusResponse {
   error?: string;
 }
 
+export interface Strategy {
+  id: string;
+  name: string;
+}
+
+export interface StockSelectionRecord {
+  code: string;
+  name: string;
+  sector: string;
+  selection_date: string;
+  timestamp: string;
+  source: string;
+  overall_score: number;
+  sentiment_norm: number;
+  tick_norm: number;
+  flow_norm: number;
+  tech_norm: number;
+  kline_norm: number;
+  price: number;
+  pct_change: number;
+}
+
 export const authApi = {
   register: (username: string, password: string) =>
     post<TokenResponse>('/api/auth/register', { username, password }),
@@ -92,6 +114,17 @@ export const platformApi = {
     post<{ success: boolean; message?: string; error?: string }>(
       `/api/platform/${platform}/comment`,
       { post_id: postId, content },
+      token,
+    ),
+};
+
+export const stockSelectionApi = {
+  getStrategies: (token: string) =>
+    get<{ strategies: Strategy[] }>('/api/stock-selection/strategies', token),
+
+  getRecords: (source: string, token: string) =>
+    get<{ source: string; records: StockSelectionRecord[]; count: number }>(
+      `/api/stock-selection/records?source=${encodeURIComponent(source)}`,
       token,
     ),
 };

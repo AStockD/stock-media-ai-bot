@@ -4,7 +4,7 @@ from typing import Optional
 
 import pymysql
 
-from app.config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+from app.config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, ASTOCKD_DB_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -68,3 +68,26 @@ def init_db():
                 if stmt:
                     cur.execute(stmt)
     logger.info("Database tables initialized")
+
+
+def get_astockd_connection() -> pymysql.Connection:
+    return pymysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=ASTOCKD_DB_NAME,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=5,
+        read_timeout=10,
+    )
+
+
+@contextmanager
+def get_astockd_db():
+    conn = get_astockd_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()

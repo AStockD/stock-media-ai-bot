@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { platformApi, type UserInfo, type PlatformAccount } from './api/client';
+import { platformApi, stockSelectionApi, type UserInfo, type PlatformAccount, type Strategy, type StockSelectionRecord } from './api/client';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import './App.css';
@@ -37,6 +37,10 @@ export default function App() {
   const [loginActive, setLoginActive] = useState(false);
   const [postContent, setPostContent] = useState('');
   const [postMsg, setPostMsg] = useState('');
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [selectedStrategy, setSelectedStrategy] = useState('');
+  const [selectionRecords, setSelectionRecords] = useState<StockSelectionRecord[]>([]);
+  const [selectionLoading, setSelectionLoading] = useState(false);
 
   const handleLogin = (t: string, u: UserInfo) => {
     localStorage.setItem('smab_token', t);
@@ -63,9 +67,20 @@ export default function App() {
     } catch { /* ignore */ }
   }, [token]);
 
+  const fetchStrategies = useCallback(async () => {
+    if (!token) return;
+    try {
+      const resp = await stockSelectionApi.getStrategies(token);
+      setStrategies(resp.strategies);
+    } catch { /* ignore */ }
+  }, [token]);
+
   useEffect(() => {
-    if (page === 'dashboard') fetchAccounts();
-  }, [page, fetchAccounts]);
+    if (page === 'dashboard') {
+      fetchAccounts();
+      fetchStrategies();
+    }
+  }, [page, fetchAccounts, fetchStrategies]);
 
   function getAccountStatus(platform: string): PlatformAccount | undefined {
     return accounts.find(a => a.platform === platform);
@@ -139,6 +154,20 @@ export default function App() {
       if (resp.success) setPostContent('');
     } catch (err: unknown) {
       setPostMsg(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handleStrategyClick(strategyId: string) {
+    setSelectedStrategy(strategyId);
+    setSelectionLoading(true);
+    setSelectionRecords([]);
+    try {
+      const resp = await stockSelectionApi.getRecords(strategyId, token);
+      setSelectionRecords(resp.records);
+    } catch (err: unknown) {
+      console.error('Failed to fetch records:', err);
+    } finally {
+      setSelectionLoading(false);
     }
   }
 
@@ -242,6 +271,69 @@ export default function App() {
             </button>
           </div>
         </section>
+
+        {strategies.length > 0 && (
+          <section className="selection-section">
+            <h2>Stock Selection Records</h2>
+            <div className="selection-strategies">
+              {strategies.map(s => (
+                <button
+                  key={s.id}
+                  className={`strategy-btn ${selectedStrategy === s.id ? 'active' : ''}`}
+                  onClick={() => handleStrategyClick(s.id)}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+            {selectionLoading && <p className="selection-loading">Loading...</p>}
+            {!selectionLoading && selectionRecords.length > 0 && (
+              <div className="selection-table-wrap">
+                <table className="selection-table">
+                  <thead>
+                    <tr>
+                      <th>Code</th>
+                      <th>Name</th>
+                      <th>Sector</th>
+                      <th>Score</th>
+                      <th>Sentiment</th>
+                      <th>Tick</th>
+                      <th>Flow</th>
+                      <th>Tech</th>
+                      <th>Kline</th>
+                      <th>Price</th>
+                      <th>Change%</th>
+                      <th>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectionRecords.map((r, i) => (
+                      <tr key={r.code + i}>
+                        <td className="code-cell">{r.code}</td>
+                        <td>{r.name}</td>
+                        <td>{r.sector}</td>
+                        <td className="score-cell">{r.overall_score}</td>
+                        <td>{r.sentiment_norm}</td>
+                        <td>{r.tick_norm}</td>
+                        <td>{r.flow_norm}</td>
+                        <td>{r.tech_norm}</td>
+                        <td>{r.kline_norm}</td>
+                        <td>{r.price}</td>
+                        <td className={r.pct_change >= 0 ? 'pct-up' : 'pct-down'}>
+                          {r.pct_change > 0 ? '+' : ''}{r.pct_change}%
+                        </td>
+                        <td className="time-cell">{r.timestamp.split(' ')[1] || r.timestamp}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {!selectionLoading && selectedStrategy && selectionRecords.length === 0 && (
+              <p className="selection-empty">No records for today</p>
+            )}
+          </section>
+        )}
       </main>
     </div>
   );

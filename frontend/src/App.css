@@ -434,3 +434,117 @@ body {
   color: var(--text-muted);
   margin-bottom: 12px;
 }
+
+/* Stock Selection */
+.selection-section {
+  margin-bottom: 32px;
+}
+
+.selection-strategies {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.strategy-btn {
+  padding: 10px 22px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  transition: all 0.2s;
+}
+
+.strategy-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--primary);
+}
+
+.strategy-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.selection-loading {
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 20px;
+}
+
+.selection-empty {
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 20px;
+}
+
+.selection-table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.selection-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: var(--bg-card);
+}
+
+.selection-table th {
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.selection-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.selection-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.selection-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.code-cell {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--primary);
+}
+
+.score-cell {
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.pct-up {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.pct-down {
+  color: var(--success);
+  font-weight: 500;
+}
+
+.time-cell {
+  color: var(--text-muted);
+  font-size: 12px;
+}

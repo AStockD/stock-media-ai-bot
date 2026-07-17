@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import init_db
 from app.routers.auth import router as auth_router
 from app.routers.platform import router as platform_router
+from app.routers.stock_selection import router as stock_selection_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -26,6 +27,7 @@ async def startup():
 
 app.include_router(auth_router)
 app.include_router(platform_router)
+app.include_router(stock_selection_router)
 
 
 @app.get("/health")

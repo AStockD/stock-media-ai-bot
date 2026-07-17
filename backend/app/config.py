@@ -22,6 +22,7 @@ DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_USER = os.getenv("DB_USER", "smab")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 DB_NAME = os.getenv("DB_NAME", "smab")
+ASTOCKD_DB_NAME = os.getenv("ASTOCKD_DB_NAME", "astockd")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "smab-dev-secret-change-in-prod")
 JWT_ALGORITHM = "HS256"
