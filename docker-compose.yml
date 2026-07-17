@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: smab-backend
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./backend/data:/app/data
+    networks:
+      - smab
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: smab-frontend
+    ports:
+      - "3002:80"
+    depends_on:
+      - backend
+    networks:
+      - smab
+    restart: unless-stopped
+
+networks:
+  smab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.23.0.0/16
+          gateway: 172.23.0.1
