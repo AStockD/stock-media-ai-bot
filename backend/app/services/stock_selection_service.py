@@ -1,8 +1,10 @@
-"""Stock selection records service - query astockd database."""
+"""Stock selection records service - calls stock-diagnosis-app API."""
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from app.database import get_astockd_db
+import httpx
+
+from app.config import STOCK_ANALYZE_URL, STOCK_ANALYZE_BEARER_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -15,47 +17,46 @@ STRATEGIES = [
 
 
 class StockSelectionService:
+    def __init__(self):
+        self._client = httpx.Client(
+            base_url=STOCK_ANALYZE_URL,
+            headers={
+                "Authorization": f"Bearer {STOCK_ANALYZE_BEARER_TOKEN}",
+                "Content-Type": "application/json",
+                "User-Agent": "StockMediaAIBot/0.3",
+            },
+            timeout=15,
+        )
+
     def get_strategies(self) -> List[Dict]:
         return STRATEGIES
 
     def get_latest_records(self, source: str) -> List[Dict]:
-        with get_astockd_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT code, name, sector, selection_date, timestamp,
-                              source, overall_score, sentiment_norm, tick_norm,
-                              flow_norm, tech_norm, kline_norm, price, pct_change
-                       FROM stock_selection_records
-                       WHERE source = %s
-                         AND selection_date = (
-                             SELECT MAX(selection_date)
-                             FROM stock_selection_records
-                             WHERE source = %s
-                         )
-                       ORDER BY timestamp DESC""",
-                    (source, source),
-                )
-                rows = cur.fetchall()
-        results = []
-        for row in rows:
-            results.append({
-                "code": row["code"],
-                "name": row["name"],
-                "sector": row["sector"] or "",
-                "selection_date": str(row["selection_date"]),
-                "timestamp": str(row["timestamp"]),
-                "source": row["source"],
-                "overall_score": float(row["overall_score"]),
-                "sentiment_norm": float(row["sentiment_norm"]),
-                "tick_norm": float(row["tick_norm"]),
-                "flow_norm": float(row["flow_norm"]),
-                "tech_norm": float(row["tech_norm"]),
-                "kline_norm": float(row["kline_norm"]),
-                "price": float(row["price"]),
-                "pct_change": float(row["pct_change"]),
+        body = {"source": source} if source else {}
+        resp = self._client.post("/scores/selection-records", json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        records = []
+        for r in data.get("records", []):
+            records.append({
+                "code": r["code"],
+                "name": r["name"],
+                "sector": r.get("sector", ""),
+                "selection_date": r.get("selection_date", ""),
+                "timestamp": r.get("timestamp", ""),
+                "source": r["source"],
+                "sub_sources": r.get("sub_sources", []),
+                "overall_score": float(r.get("overall_score", 0)),
+                "sentiment_norm": float(r.get("sentiment_norm", 0)),
+                "tick_norm": float(r.get("tick_norm", 0)),
+                "flow_norm": float(r.get("flow_norm", 0)),
+                "tech_norm": float(r.get("tech_norm", 0)),
+                "kline_norm": float(r.get("kline_norm", 0)),
+                "price": float(r.get("price", 0)),
+                "pct_change": float(r.get("pct_change", 0)),
             })
-        logger.info(f"Fetched {len(results)} records for source={source}")
-        return results
+        logger.info(f"Fetched {len(records)} records for source={source} via API")
+        return records
 
 
 stock_selection_service = StockSelectionService()

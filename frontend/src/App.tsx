@@ -295,6 +295,7 @@ export default function App() {
                       <th>Code</th>
                       <th>Name</th>
                       <th>Sector</th>
+                      <th>Sub</th>
                       <th>Score</th>
                       <th>Sentiment</th>
                       <th>Tick</th>
@@ -312,6 +313,7 @@ export default function App() {
                         <td className="code-cell">{r.code}</td>
                         <td>{r.name}</td>
                         <td>{r.sector}</td>
+                        <td className="sub-cell">{(r.sub_sources || []).join(', ')}</td>
                         <td className="score-cell">{r.overall_score}</td>
                         <td>{r.sentiment_norm}</td>
                         <td>{r.tick_norm}</td>

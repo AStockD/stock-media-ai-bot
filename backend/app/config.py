@@ -27,3 +27,8 @@ ASTOCKD_DB_NAME = os.getenv("ASTOCKD_DB_NAME", "astockd")
 JWT_SECRET = os.getenv("JWT_SECRET", "smab-dev-secret-change-in-prod")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 72
+
+STOCK_ANALYZE_URL = os.getenv("STOCK_ANALYZE_URL", "http://10.0.0.135:8888")
+STOCK_ANALYZE_BEARER_TOKEN = os.getenv(
+    "STOCK_ANALYZE_BEARER_TOKEN", "astk_d8a7f2e6b4c9103591d4e8b7a6c5f3d2"
+)

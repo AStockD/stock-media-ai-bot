@@ -71,6 +71,7 @@ export interface StockSelectionRecord {
   selection_date: string;
   timestamp: string;
   source: string;
+  sub_sources: string[];
   overall_score: number;
   sentiment_norm: number;
   tick_norm: number;
