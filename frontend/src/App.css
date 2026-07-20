@@ -334,6 +334,23 @@ body {
   color: var(--text-muted);
 }
 
+.llm-opt-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.llm-opt-toggle input[type="checkbox"] {
+  accent-color: var(--primary);
+  width: 15px;
+  height: 15px;
+}
+
 /* Stock Cards */
 .stock-cards {
   display: flex;

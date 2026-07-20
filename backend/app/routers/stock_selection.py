@@ -4,6 +4,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth import get_current_user
+from app.services.llm_content_service import llm_content_service
 from app.services.stock_selection_service import stock_selection_service
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,19 @@ async def analyze_stock(
     stock_name = body.get("stock_name", "")
     raw_summary, summary = stock_selection_service.analyze_query(query, stock_name)
     return {"summary": summary, "raw_summary": raw_summary}
+
+
+@router.post("/optimize-content")
+async def optimize_content(
+    body: dict,
+    user: dict = Depends(get_current_user),
+):
+    summary = body.get("summary", "")
+    if not summary:
+        raise HTTPException(status_code=400, detail="summary is required")
+    stock_name = body.get("stock_name", "")
+    optimized = llm_content_service.optimize_content(summary, stock_name)
+    return {"optimized_summary": optimized}
 
 
 @router.get("/kline")

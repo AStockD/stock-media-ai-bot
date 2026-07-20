@@ -37,3 +37,7 @@ ASTOCKD_POSTER_API_URL = os.getenv(
     "ASTOCKD_POSTER_API_URL", "https://astockd.com/api/v1/operator/posters/generate"
 )
 ASTOCKD_POSTER_API_TOKEN = os.getenv("ASTOCKD_POSTER_API_TOKEN", "")
+
+LLM_API_URL = os.getenv("LLM_API_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")

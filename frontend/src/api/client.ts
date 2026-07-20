@@ -145,6 +145,9 @@ export const stockSelectionApi = {
   analyzeQuery: (query: string, token: string, stockName?: string) =>
     post<{ summary: string; raw_summary: string }>('/api/stock-selection/analyze', { query, stock_name: stockName }, token),
 
+  optimizeContent: (summary: string, stockName: string, token: string) =>
+    post<{ optimized_summary: string }>('/api/stock-selection/optimize-content', { summary, stock_name: stockName }, token),
+
   getKline: (code: string, token: string) =>
     get<{ klines: string[] }>(`/api/stock-selection/kline?code=${encodeURIComponent(code)}`, token),
 };

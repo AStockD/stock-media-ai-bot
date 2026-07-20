@@ -41,6 +41,8 @@ export default function PostManagement({ token }: Props) {
   const [posterLoading, setPosterLoading] = useState(false);
   const [customStockMode, setCustomStockMode] = useState(false);
   const [customStockName, setCustomStockName] = useState('');
+  const [llmOptimize, setLlmOptimize] = useState(true);
+  const [llmOptimizing, setLlmOptimizing] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -98,7 +100,18 @@ export default function PostManagement({ token }: Props) {
     setPosterUrl('');
     try {
       const resp = await stockSelectionApi.analyzeQuery(`看看${name}`, token, name);
-      setPostContent(resp.summary);
+      let content = resp.summary;
+
+      if (llmOptimize) {
+        setLlmOptimizing(true);
+        try {
+          const optResp = await stockSelectionApi.optimizeContent(resp.summary, name, token);
+          content = optResp.optimized_summary;
+        } catch { /* fallback to original content */ }
+        finally { setLlmOptimizing(false); }
+      }
+
+      setPostContent(content);
       setGeneratedStock(name);
 
       const today = new Date().toISOString().split('T')[0];
@@ -126,7 +139,18 @@ export default function PostManagement({ token }: Props) {
     setPosterUrl('');
     try {
       const resp = await stockSelectionApi.analyzeQuery(`看看${record.name}`, token, record.name);
-      setPostContent(resp.summary);
+      let content = resp.summary;
+
+      if (llmOptimize) {
+        setLlmOptimizing(true);
+        try {
+          const optResp = await stockSelectionApi.optimizeContent(resp.summary, record.name, token);
+          content = optResp.optimized_summary;
+        } catch { /* fallback to original content */ }
+        finally { setLlmOptimizing(false); }
+      }
+
+      setPostContent(content);
       setGeneratedStock(record.name);
 
       // Generate poster
@@ -213,6 +237,17 @@ export default function PostManagement({ token }: Props) {
             </button>
           </div>
 
+          {!customStockMode && selectedStrategy && (
+            <label className="llm-opt-toggle">
+              <input
+                type="checkbox"
+                checked={llmOptimize}
+                onChange={e => setLlmOptimize(e.target.checked)}
+              />
+              <span>LLM 优化内容</span>
+            </label>
+          )}
+
           {customStockMode && (
             <div className="custom-stock-area">
               <div className="custom-stock-input-row">
@@ -232,6 +267,14 @@ export default function PostManagement({ token }: Props) {
                   {analyzingCode === 'custom' ? '...' : '生成'}
                 </button>
               </div>
+              <label className="llm-opt-toggle">
+                <input
+                  type="checkbox"
+                  checked={llmOptimize}
+                  onChange={e => setLlmOptimize(e.target.checked)}
+                />
+                <span>LLM 优化内容</span>
+              </label>
             </div>
           )}
 
@@ -290,6 +333,7 @@ export default function PostManagement({ token }: Props) {
             <div className="sticky-bottom">
               <div className="generated-hint">
                 {generatedStock} content ready
+                {llmOptimizing && <span className="poster-loading"> · LLM 优化中...</span>}
                 {posterLoading && <span className="poster-loading"> · 生成海报中...</span>}
               </div>
               <button className="btn btn-primary btn-block" onClick={() => setStep(2)}>
