@@ -34,16 +34,19 @@ class StockSelectionService:
     def get_strategies(self) -> List[Dict]:
         return STRATEGIES
 
-    def analyze_query(self, query: str, stock_name: str = "") -> str:
+    def analyze_query(self, query: str, stock_name: str = "") -> tuple[str, str]:
         resp = self._client.post("/analyze/query", json={"query": query}, timeout=300)
         resp.raise_for_status()
         data = resp.json()
-        summary = data.get("summary", "")
+        raw_summary = data.get("summary", "")
+        summary = raw_summary
 
+        disclaimer = ""
         if stock_name:
             today = date.today().strftime("%Y/%m/%d")
-            new_title = f"## A股道股票解读每日分享 - {today} - {stock_name}\n\n*(免责申明: 本文解读内容均为 【A股道】AI 股票诊断生成，不构成投资建议，仅供参考！)*"
+            new_title = f"## A股道股票解读每日分享 - {stock_name}\n【{today}】"
             summary = re.sub(r"^## [^\n]+", new_title, summary, count=1, flags=re.MULTILINE)
+            disclaimer = "\n\n*(免责申明: 本文解读内容均为 【A股道】AI 股票诊断生成，不构成投资建议，仅供参考！)*"
 
         summary = re.sub(
             r"^## 快速结论\n[\s\S]*?(?=^## |\Z)",
@@ -73,8 +76,17 @@ class StockSelectionService:
             flags=re.MULTILINE,
         )
 
+        summary = re.sub(r"^#{1,6}\s+", "", summary, flags=re.MULTILINE)
+        summary = re.sub(r"\*\*(.+?)\*\*", r"\1", summary)
+        summary = re.sub(r"\*(.+?)\*", r"\1", summary)
+        summary = re.sub(r"^---+\s*$", "", summary, flags=re.MULTILINE)
+        summary = re.sub(r"^>\s?", "", summary, flags=re.MULTILINE)
+        summary = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", summary)
+
+        summary = summary.rstrip() + disclaimer
+
         logger.info(f"Analyze query='{query}', summary length={len(summary)}")
-        return summary
+        return raw_summary, summary
 
     def get_latest_records(self, source: str) -> List[Dict]:
         body = {"source": source} if source else {}

@@ -168,7 +168,12 @@ class XueqiuPostService:
             def on_response(response):
                 url = response.url
                 if any(kw in url for kw in ["statuses", "post", "create", "update", "publish"]):
-                    api_responses.append({"url": url, "status": response.status})
+                    entry = {"url": url, "status": response.status, "body": ""}
+                    try:
+                        entry["body"] = response.text()
+                    except Exception:
+                        pass
+                    api_responses.append(entry)
                     logger.info(f"Relevant API response: {url} -> {response.status}")
 
             page.on("response", on_response)
@@ -367,7 +372,30 @@ class XueqiuPostService:
             new_storage = await context.storage_state()
             cookies_list = await context.cookies()
             cookies_dict = {c["name"]: c["value"] for c in cookies_list}
-            self.account_manager.save_cookies(user_id, platform, cookies_dict, new_storage)
+
+            account_name = None
+            try:
+                account_name = await page.evaluate("""() => {
+                    const links = document.querySelectorAll('a.user-name');
+                    for (const a of links) {
+                        const text = a.textContent.trim();
+                        if (text && text.length > 0 && text.length < 50) {
+                            return text;
+                        }
+                    }
+                    const allLinks = document.querySelectorAll('a[href*="/u/"]');
+                    for (const a of allLinks) {
+                        const text = a.textContent.trim();
+                        if (text && text.length > 0 && text.length < 50) {
+                            return text;
+                        }
+                    }
+                    return null;
+                }""")
+            except Exception:
+                pass
+
+            self.account_manager.save_cookies(user_id, platform, cookies_dict, new_storage, account_name)
 
             current_url = page.url
             logger.info(f"After submit URL: {current_url}")
@@ -380,7 +408,25 @@ class XueqiuPostService:
             )
 
             if post_success:
-                return {"success": True, "message": "发帖成功", "url": current_url}
+                post_id = ""
+                for r in api_responses:
+                    if r.get("status") in (200, 201) and any(kw in r.get("url", "") for kw in ["create", "update"]):
+                        try:
+                            body = json.loads(r.get("body", "{}"))
+                            post_id = str(body.get("id", "") or body.get("statuses_id", ""))
+                        except Exception:
+                            pass
+                        if post_id:
+                            break
+
+                if not post_id:
+                    parts = current_url.rstrip("/").split("/")
+                    if parts:
+                        last = parts[-1]
+                        if last.isdigit():
+                            post_id = last
+
+                return {"success": True, "message": "发帖成功", "url": current_url, "post_id": post_id}
             else:
                 error_detail = error_msg or "未检测到发帖API请求，可能提交失败"
                 logger.warning(f"Post may have failed: {error_detail}")

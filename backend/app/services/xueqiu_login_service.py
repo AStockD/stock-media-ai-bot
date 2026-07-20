@@ -210,11 +210,36 @@ class XueqiuLoginService:
 
         storage_state = await context.storage_state()
 
+        account_name = None
+        try:
+            account_name = await session.page.evaluate("""() => {
+                const links = document.querySelectorAll('a.user-name');
+                for (const a of links) {
+                    const text = a.textContent.trim();
+                    if (text && text.length > 0 && text.length < 50) {
+                        return text;
+                    }
+                }
+                const allLinks = document.querySelectorAll('a[href*="/u/"]');
+                for (const a of allLinks) {
+                    const text = a.textContent.trim();
+                    if (text && text.length > 0 && text.length < 50) {
+                        return text;
+                    }
+                }
+                return null;
+            }""")
+            if account_name:
+                logger.info(f"Extracted account_name: {account_name}")
+        except Exception as e:
+            logger.warning(f"Failed to extract account_name: {e}")
+
         self.account_manager.save_cookies(
             user_id=session.user_id,
             platform=session.platform,
             cookies=cookies_dict,
             storage_state=storage_state,
+            account_name=account_name,
         )
 
         await self._cleanup_session(session)

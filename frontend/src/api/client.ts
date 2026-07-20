@@ -45,6 +45,13 @@ export interface PlatformAccount {
   cookie_count: number;
 }
 
+export interface PostHistory {
+  post_id: string;
+  title: string;
+  url: string;
+  created_at: string;
+}
+
 export interface LoginStartResponse {
   status: string;
   qr_image?: string;
@@ -105,16 +112,22 @@ export const platformApi = {
     post<{ status: string }>(`/api/platform/${platform}/login/cancel`, undefined, token),
 
   createPost: (platform: string, content: string, token: string, imageUrl?: string) =>
-    post<{ success: boolean; message?: string; url?: string; error?: string }>(
+    post<{ success: boolean; message?: string; url?: string; error?: string; post_id?: string }>(
       `/api/platform/${platform}/post`,
       { content, image_url: imageUrl },
       token,
     ),
 
-  createComment: (platform: string, postId: number, content: string, token: string) =>
+  getPosts: (platform: string, token: string, refresh?: boolean) =>
+    get<{ posts: PostHistory[]; cached_at?: string; error?: string }>(
+      `/api/platform/${platform}/posts${refresh ? '?refresh=1' : ''}`,
+      token,
+    ),
+
+  createComment: (platform: string, content: string, token: string, postId?: number, postUrl?: string, postTitle?: string) =>
     post<{ success: boolean; message?: string; error?: string }>(
       `/api/platform/${platform}/comment`,
-      { post_id: postId, content },
+      { post_id: postId, post_url: postUrl, post_title: postTitle, content },
       token,
     ),
 };
@@ -130,7 +143,7 @@ export const stockSelectionApi = {
     ),
 
   analyzeQuery: (query: string, token: string, stockName?: string) =>
-    post<{ summary: string }>('/api/stock-selection/analyze', { query, stock_name: stockName }, token),
+    post<{ summary: string; raw_summary: string }>('/api/stock-selection/analyze', { query, stock_name: stockName }, token),
 
   getKline: (code: string, token: string) =>
     get<{ klines: string[] }>(`/api/stock-selection/kline?code=${encodeURIComponent(code)}`, token),

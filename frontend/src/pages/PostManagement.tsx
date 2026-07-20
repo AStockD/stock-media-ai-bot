@@ -39,6 +39,8 @@ export default function PostManagement({ token }: Props) {
   const [expandedChart, setExpandedChart] = useState<string | null>(null);
   const [posterUrl, setPosterUrl] = useState('');
   const [posterLoading, setPosterLoading] = useState(false);
+  const [customStockMode, setCustomStockMode] = useState(false);
+  const [customStockName, setCustomStockName] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -66,6 +68,8 @@ export default function PostManagement({ token }: Props) {
 
   async function handleStrategyClick(strategyId: string) {
     setSelectedStrategy(strategyId);
+    setCustomStockMode(false);
+    setCustomStockName('');
     setSelectionLoading(true);
     setSelectionRecords([]);
     setPostContent('');
@@ -75,6 +79,45 @@ export default function PostManagement({ token }: Props) {
       setSelectionRecords(resp.records);
     } catch { /* ignore */ }
     finally { setSelectionLoading(false); }
+  }
+
+  function handleCustomStockClick() {
+    setCustomStockMode(true);
+    setSelectedStrategy('');
+    setSelectionRecords([]);
+    setPostContent('');
+    setGeneratedStock('');
+    setPosterUrl('');
+  }
+
+  async function handleCustomGenerate() {
+    const name = customStockName.trim();
+    if (!name) return;
+    setAnalyzingCode('custom');
+    setPosterLoading(true);
+    setPosterUrl('');
+    try {
+      const resp = await stockSelectionApi.analyzeQuery(`看看${name}`, token, name);
+      setPostContent(resp.summary);
+      setGeneratedStock(name);
+
+      const today = new Date().toISOString().split('T')[0];
+      const titleMatch = resp.summary.match(/^##\s+(.+)$/m);
+      const title = titleMatch ? titleMatch[1] : `${name}（${today}）`;
+      try {
+        const posterResp = await posterApi.generate(
+          title,
+          `分析一下${name}`,
+          resp.raw_summary,
+          'https://www.astockd.com',
+          token,
+        );
+        if (posterResp.code === 200 && posterResp.data?.url) {
+          setPosterUrl(posterResp.data.url);
+        }
+      } catch { /* poster generation failed, continue without image */ }
+    } catch { /* ignore */ }
+    finally { setAnalyzingCode(''); setPosterLoading(false); }
   }
 
   async function handleAnalyze(record: StockSelectionRecord) {
@@ -94,7 +137,7 @@ export default function PostManagement({ token }: Props) {
         const posterResp = await posterApi.generate(
           title,
           `分析一下${record.name}这只股票`,
-          resp.summary,
+          resp.raw_summary,
           'https://www.astockd.com',
           token,
         );
@@ -162,7 +205,35 @@ export default function PostManagement({ token }: Props) {
                 {s.name}
               </button>
             ))}
+            <button
+              className={`strategy-btn custom ${customStockMode ? 'active' : ''}`}
+              onClick={handleCustomStockClick}
+            >
+              自定义发帖
+            </button>
           </div>
+
+          {customStockMode && (
+            <div className="custom-stock-area">
+              <div className="custom-stock-input-row">
+                <input
+                  type="text"
+                  className="custom-stock-input"
+                  placeholder="输入股票名称，如：贵州茅台"
+                  value={customStockName}
+                  onChange={e => setCustomStockName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleCustomGenerate(); }}
+                />
+                <button
+                  className="btn-generate"
+                  onClick={handleCustomGenerate}
+                  disabled={!customStockName.trim() || analyzingCode !== ''}
+                >
+                  {analyzingCode === 'custom' ? '...' : '生成'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {selectionLoading && <p className="selection-loading">Loading...</p>}
 
@@ -211,7 +282,7 @@ export default function PostManagement({ token }: Props) {
             </div>
           )}
 
-          {!selectionLoading && selectedStrategy && selectionRecords.length === 0 && (
+          {!selectionLoading && selectedStrategy && !customStockMode && selectionRecords.length === 0 && (
             <p className="selection-empty">No records for today</p>
           )}
 

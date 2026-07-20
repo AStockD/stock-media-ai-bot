@@ -33,8 +33,8 @@ async def analyze_stock(
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
     stock_name = body.get("stock_name", "")
-    summary = stock_selection_service.analyze_query(query, stock_name)
-    return {"summary": summary}
+    raw_summary, summary = stock_selection_service.analyze_query(query, stock_name)
+    return {"summary": summary, "raw_summary": raw_summary}
 
 
 @router.get("/kline")

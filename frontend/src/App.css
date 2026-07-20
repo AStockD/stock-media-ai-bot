@@ -291,6 +291,49 @@ body {
   color: #fff;
 }
 
+.strategy-btn.custom {
+  border-style: dashed;
+}
+
+.strategy-btn.custom.active {
+  border-style: solid;
+}
+
+/* Custom Stock Input Area */
+.custom-stock-area {
+  margin-bottom: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.custom-stock-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.custom-stock-input {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.custom-stock-input:focus {
+  border-color: var(--primary);
+}
+
+.custom-stock-input::placeholder {
+  color: var(--text-muted);
+}
+
 /* Stock Cards */
 .stock-cards {
   display: flex;
@@ -991,6 +1034,191 @@ body {
 .poster-preview-image {
   width: 100%;
   display: block;
+}
+
+/* My Posts Page */
+.my-posts-page {
+  padding-bottom: 20px;
+}
+
+.my-posts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.my-posts-info {
+  display: flex;
+  align-items: center;
+}
+
+.cache-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.btn-refresh {
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  transition: all 0.2s;
+}
+
+.btn-refresh:hover:not(:disabled) {
+  background: var(--primary);
+  color: #fff;
+}
+
+.btn-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.my-posts-error {
+  padding: 10px 14px;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+/* Post History Section */
+.post-history-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.post-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.post-history-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.phc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.phc-title {
+  font-size: 15px;
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phc-date {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.phc-link {
+  font-size: 12px;
+  color: var(--primary);
+  text-decoration: none;
+  display: inline-block;
+  margin-bottom: 8px;
+}
+
+.phc-link:hover {
+  text-decoration: underline;
+}
+
+.phc-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-comment {
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  transition: all 0.2s;
+}
+
+.btn-comment:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* Comment Form */
+.comment-form {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.comment-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+  line-height: 1.5;
+}
+
+.comment-textarea:focus {
+  border-color: var(--primary);
+}
+
+.comment-form-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.btn-sm {
+  padding: 8px 16px;
+  font-size: 13px;
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+.comment-result {
+  margin-top: 8px;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.comment-result.result-ok {
+  color: var(--success);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.comment-result.result-fail {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
 }
 
 /* Desktop responsive */

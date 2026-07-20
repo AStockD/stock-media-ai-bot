@@ -3,14 +3,16 @@ import { platformApi, type UserInfo, type PlatformAccount } from './api/client';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import PostManagement from './pages/PostManagement';
+import MyPosts from './pages/MyPosts';
 import Settings from './pages/Settings';
 import './App.css';
 
 type AuthPage = 'login' | 'register';
-type Page = 'post' | 'settings';
+type Page = 'post' | 'myposts' | 'settings';
 
 const PAGE_TITLES: Record<Page, string> = {
   post: '发帖管理',
+  myposts: '我的帖子',
   settings: '设置',
 };
 
@@ -99,6 +101,13 @@ export default function App() {
                 发帖管理
               </button>
               <button
+                className={`drawer-item ${currentPage === 'myposts' ? 'active' : ''}`}
+                onClick={() => navigateTo('myposts')}
+              >
+                <span className="drawer-icon">📋</span>
+                我的帖子
+              </button>
+              <button
                 className={`drawer-item ${currentPage === 'settings' ? 'active' : ''}`}
                 onClick={() => navigateTo('settings')}
               >
@@ -118,6 +127,7 @@ export default function App() {
 
       <main className="main">
         {currentPage === 'post' && <PostManagement token={token} />}
+        {currentPage === 'myposts' && <MyPosts token={token} />}
         {currentPage === 'settings' && (
           <Settings token={token} accounts={accounts} onAccountsRefresh={fetchAccounts} />
         )}
