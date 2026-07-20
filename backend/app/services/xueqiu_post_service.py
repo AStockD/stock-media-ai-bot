@@ -1,8 +1,10 @@
 """Xueqiu post creation service using Playwright with per-user storage state."""
 import asyncio
+import glob
 import json
 import logging
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +15,8 @@ from app.services.account_manager import AccountManager
 
 logger = logging.getLogger(__name__)
 
+TEMP_FILE_MAX_AGE = 8 * 3600  # 8 hours
+
 
 class XueqiuPostService:
     def __init__(self, account_manager: AccountManager):
@@ -22,6 +26,23 @@ class XueqiuPostService:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         )
+
+    @staticmethod
+    def _cleanup_temp_files():
+        """Remove temp image files and screenshots older than TEMP_FILE_MAX_AGE."""
+        now = time.time()
+        patterns = ["/tmp/tmp*.png", "/tmp/tmp*.jpg", "/tmp/xq_*.png"]
+        removed = 0
+        for pattern in patterns:
+            for fpath in glob.glob(pattern):
+                try:
+                    if now - Path(fpath).stat().st_mtime > TEMP_FILE_MAX_AGE:
+                        Path(fpath).unlink()
+                        removed += 1
+                except Exception:
+                    pass
+        if removed:
+            logger.info(f"Cleaned up {removed} old temp files")
 
     async def _setup_browser(self, storage_state_path: str):
         pw = await async_playwright().start()
@@ -96,53 +117,11 @@ class XueqiuPostService:
             tmp.close()
             return tmp.name
 
-    async def _upload_image_to_xueqiu(self, page, image_path: str) -> Optional[str]:
-        """Upload image directly via Xueqiu's upload API"""
-        try:
-            # Read image file
-            with open(image_path, 'rb') as f:
-                image_data = f.read()
-
-            # Get upload token
-            token_resp = await page.evaluate("""async () => {
-                const resp = await fetch('https://xueqiu.com/upload/token.json');
-                return await resp.json();
-            }""")
-            logger.info(f"Upload token response: {token_resp}")
-
-            if not token_resp or 'token' not in token_resp:
-                logger.error("Failed to get upload token")
-                return None
-
-            upload_token = token_resp['token']
-
-            # Upload image
-            upload_resp = await page.evaluate("""async (imageData, token) => {
-                const blob = new Blob([new Uint8Array(imageData)], {type: 'image/png'});
-                const formData = new FormData();
-                formData.append('file', blob, 'image.png');
-                formData.append('token', token);
-
-                const resp = await fetch('https://xueqiu.com/upload/image.json', {
-                    method: 'POST',
-                    body: formData
-                });
-                return await resp.json();
-            }""", list(image_data), upload_token)
-
-            logger.info(f"Image upload response: {upload_resp}")
-
-            if upload_resp and 'url' in upload_resp:
-                return upload_resp['url']
-            return None
-
-        except Exception as e:
-            logger.error(f"Failed to upload image via API: {e}")
-            return None
-
     async def create_post(self, user_id: int, content: str,
                           image_path: str = None, image_url: str = None,
                           platform: str = "xueqiu") -> dict:
+        self._cleanup_temp_files()
+
         storage_state_path = self.account_manager.get_storage_state_path(user_id, platform)
         if not storage_state_path:
             return {"success": False, "error": "未登录，请先扫码登录"}
@@ -151,16 +130,6 @@ class XueqiuPostService:
         browser = None
         downloaded_image = None
         try:
-            if image_url and not image_path:
-                try:
-                    logger.info(f"Downloading image from: {image_url}")
-                    downloaded_image = await self._download_image(image_url)
-                    image_path = downloaded_image
-                    logger.info(f"Image downloaded to: {image_path}")
-                except Exception as e:
-                    logger.error(f"Failed to download image: {e}")
-                    return {"success": False, "error": f"图片下载失败: {e}"}
-
             pw, browser, context, page = await self._setup_browser(storage_state_path)
 
             api_responses = []
@@ -183,73 +152,25 @@ class XueqiuPostService:
                 return err
 
             editor = await page.query_selector(".lite-editor__textarea.post_status")
-            if not editor or not await editor.is_visible():
+            if not editor:
                 await self._cleanup(pw, browser)
                 return {"success": False, "error": "未找到发帖编辑器"}
 
-            if image_path:
-                logger.info(f"Uploading image: {image_path}")
-                img_path = Path(image_path)
-                if not img_path.exists():
-                    await self._cleanup(pw, browser)
-                    return {"success": False, "error": f"图片文件不存在: {image_path}"}
-
-                # Focus editor first
-                await editor.evaluate("e => { e.focus(); e.click(); }")
-                await page.wait_for_timeout(1000)
-
-                # Try to find and use the file input directly
-                file_input = await page.query_selector('input[type="file"][accept*="image"]')
-                if file_input:
-                    logger.info("Found file input, using setInputFiles")
-                    await file_input.set_input_files(str(img_path))
-                    await page.wait_for_timeout(8000)
-                else:
-                    # Fallback to clicking upload button
-                    upload_btn = await page.query_selector(".lite-editor__upload--img")
-                    if not upload_btn:
-                        logger.error("Image upload button not found")
-                        await self._cleanup(pw, browser)
-                        return {"success": False, "error": "未找到图片上传按钮"}
-
-                    logger.info("Clicking upload button and selecting file")
-                    async with page.expect_file_chooser(timeout=10000) as fc_info:
-                        await upload_btn.evaluate("e => e.click()")
-                    file_chooser = await fc_info.value
-                    await file_chooser.set_files(str(img_path))
-                    await page.wait_for_timeout(8000)
-
-                logger.info("Image upload wait complete")
-                await page.screenshot(path="/tmp/xq_after_image_upload.png")
-
-                # Check if image was actually added to editor
-                img_count = await page.evaluate("""() => {
-                    const editor = document.querySelector('.lite-editor__textarea.post_status');
-                    if (!editor) return 0;
-                    return editor.querySelectorAll('img').length;
+            # Remove WAF captcha overlay before any interaction
+            try:
+                await page.evaluate("""() => {
+                    const waf = document.getElementById('waf_nc_block');
+                    if (waf) waf.remove();
+                    const mask = document.querySelector('.waf-nc-mask');
+                    if (mask) mask.remove();
                 }""")
-                logger.info(f"Images in editor after upload: {img_count}")
+            except Exception:
+                pass
 
-                try:
-                    await page.evaluate("""() => {
-                        const waf = document.getElementById('waf_nc_block');
-                        if (waf) waf.remove();
-                        const mask = document.querySelector('.waf-nc-mask');
-                        if (mask) mask.remove();
-                    }""")
-                except Exception:
-                    pass
-
-            editor = await page.query_selector(".lite-editor__textarea.post_status")
-            if not editor:
-                await self._cleanup(pw, browser)
-                return {"success": False, "error": "编辑器丢失"}
-
-            # Click the editor container to activate it
+            # --- Step 1: Type text content first ---
             await editor.evaluate("e => { e.scrollIntoView({block:'center'}); e.click(); }")
             await page.wait_for_timeout(1000)
 
-            # Wait for contenteditable to appear (created lazily by MediumEditor framework)
             content_inserted = False
             for attempt in range(5):
                 editable = await page.query_selector('.lite-editor__textarea.post_status [contenteditable="true"]')
@@ -257,15 +178,25 @@ class XueqiuPostService:
                     await editable.evaluate("e => { e.focus(); }")
                     await page.wait_for_timeout(300)
 
-                    # Use execCommand('insertText') which fires proper InputEvent for framework reactivity
-                    await page.evaluate("""(text) => {
+                    await page.evaluate("""() => {
                         const ce = document.querySelector('.lite-editor__textarea.post_status [contenteditable="true"]');
-                        if (!ce) return false;
+                        if (!ce) return;
                         ce.focus();
                         ce.innerHTML = '';
-                        document.execCommand('insertText', false, text);
-                        return true;
-                    }""", content)
+                        ce.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
+                    }""")
+                    await page.wait_for_timeout(200)
+
+                    lines = content.split('\n')
+                    for i, line in enumerate(lines):
+                        if line.strip():
+                            await page.evaluate("""(text) => {
+                                document.execCommand('insertText', false, text);
+                            }""", line)
+                            await page.evaluate("""() => {
+                                document.execCommand('insertLineBreak');
+                            }""")
+                            await page.wait_for_timeout(30)
                     await page.wait_for_timeout(500)
                     content_inserted = True
                     break
@@ -274,7 +205,6 @@ class XueqiuPostService:
                 await page.wait_for_timeout(800)
 
             if not content_inserted:
-                # Fallback: click placeholder directly to activate editor
                 logger.warning("Contenteditable not found, clicking placeholder...")
                 placeholder = await page.query_selector('.lite-editor__textarea.post_status .fake-placeholder')
                 if placeholder:
@@ -285,20 +215,23 @@ class XueqiuPostService:
                 if editable:
                     await editable.evaluate("e => { e.focus(); }")
                     await page.wait_for_timeout(300)
-                    await page.evaluate("""(text) => {
-                        const ce = document.querySelector('.lite-editor__textarea.post_status [contenteditable="true"]');
-                        if (!ce) return;
-                        ce.focus();
-                        ce.innerHTML = '';
-                        document.execCommand('insertText', false, text);
-                    }""", content)
+
+                    lines = content.split('\n')
+                    for i, line in enumerate(lines):
+                        if line.strip():
+                            await page.evaluate("""(text) => {
+                                document.execCommand('insertText', false, text);
+                            }""", line)
+                            await page.evaluate("""() => {
+                                document.execCommand('insertLineBreak');
+                            }""")
+                            await page.wait_for_timeout(30)
                     await page.wait_for_timeout(500)
                 else:
-                    # Last resort: create contenteditable with proper InputEvent
-                    logger.warning("Creating contenteditable with InputEvent dispatch")
-                    await page.evaluate("""(text) => {
+                    logger.warning("Creating contenteditable for keyboard input")
+                    await page.evaluate("""() => {
                         const ed = document.querySelector('.lite-editor__textarea.post_status');
-                        if (!ed) return false;
+                        if (!ed) return;
                         const ph = ed.querySelector('.fake-placeholder');
                         if (ph) ph.remove();
                         let ce = ed.querySelector('[contenteditable="true"]');
@@ -309,14 +242,102 @@ class XueqiuPostService:
                             ed.appendChild(ce);
                         }
                         ce.focus();
-                        ce.textContent = text;
-                        ce.dispatchEvent(new InputEvent('input', {
-                            bubbles: true, cancelable: true, inputType: 'insertText', data: text
-                        }));
-                        ce.dispatchEvent(new Event('change', {bubbles: true}));
-                        return true;
-                    }""", content)
+                    }""")
+                    await page.wait_for_timeout(300)
+
+                    lines = content.split('\n')
+                    for i, line in enumerate(lines):
+                        if line.strip():
+                            await page.evaluate("""(text) => {
+                                document.execCommand('insertText', false, text);
+                            }""", line)
+                            await page.evaluate("""() => {
+                                document.execCommand('insertLineBreak');
+                            }""")
+                            await page.wait_for_timeout(30)
                     await page.wait_for_timeout(500)
+
+            # --- Step 2: Upload image AFTER text is typed ---
+            if image_url or image_path:
+                uploaded_url = None
+
+                tmp_image = None
+                target_path = image_path
+                if not target_path or not Path(target_path).exists():
+                    if image_url:
+                        logger.info(f"Downloading image from URL: {image_url}")
+                        try:
+                            img_resp = await context.request.get(image_url)
+                            if img_resp.ok:
+                                image_data = await img_resp.body()
+                                import tempfile
+                                tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                                tmp.write(image_data)
+                                tmp.close()
+                                tmp_image = tmp.name
+                                target_path = tmp_image
+                                logger.info(f"Image downloaded: {len(image_data)} bytes -> {tmp_image}")
+                            else:
+                                logger.error(f"Failed to download image: {img_resp.status}")
+                        except Exception as e:
+                            logger.error(f"Image download failed: {e}")
+
+                if target_path:
+                    img_path = Path(target_path)
+                    if img_path.exists():
+                        logger.info(f"Uploading image via editor image button: {target_path}")
+
+                        await page.evaluate("""() => {
+                            const waf = document.getElementById('waf_nc_block');
+                            if (waf) waf.remove();
+                            const mask = document.querySelector('.waf-nc-mask');
+                            if (mask) mask.remove();
+                        }""")
+
+                        img_btn = await page.query_selector('a[data-analytics-data*="image"]')
+                        if not img_btn:
+                            logger.warning("Image upload button not found")
+                        else:
+                            try:
+                                async with page.expect_file_chooser(timeout=10000) as fc_info:
+                                    await img_btn.click(force=True)
+                                fc = await fc_info.value
+                                await fc.set_files(str(img_path))
+                                logger.info("Image file selected via chooser")
+
+                                img_ready = False
+                                for wait_attempt in range(20):
+                                    await page.wait_for_timeout(1000)
+                                    img_ready = await page.evaluate("""() => {
+                                        const ed = document.querySelector('.lite-editor__textarea.post_status');
+                                        if (!ed) return false;
+                                        const imgs = ed.querySelectorAll('img.ke_img, .img-single-upload img');
+                                        if (imgs.length === 0) return false;
+                                        for (const img of imgs) {
+                                            if (img.naturalWidth > 0 && img.clientWidth > 0) return true;
+                                        }
+                                        return false;
+                                    }""")
+                                    if img_ready:
+                                        break
+                                logger.info(f"Image ready in editor: {img_ready} (waited {wait_attempt + 1}s)")
+                                if img_ready:
+                                    uploaded_url = "file_chooser_upload"
+                            except Exception as e:
+                                logger.error(f"File chooser failed: {e}")
+                    else:
+                        logger.error(f"Image file not found: {target_path}")
+
+                if tmp_image:
+                    try:
+                        Path(tmp_image).unlink()
+                    except Exception:
+                        pass
+
+                if not uploaded_url:
+                    logger.error("Image upload failed")
+
+                await page.screenshot(path="/tmp/xq_after_image_upload.png")
 
             await page.screenshot(path="/tmp/xq_before_submit.png")
 
@@ -324,7 +345,31 @@ class XueqiuPostService:
                 const ed = document.querySelector('.lite-editor__textarea.post_status');
                 return ed ? ed.innerHTML : 'NOT FOUND';
             }""")
-            logger.info(f"Editor HTML: {editor_html[:500]}")
+            logger.info(f"Editor HTML length: {len(editor_html)}")
+            logger.info(f"Editor HTML: {editor_html[:2000]}")
+
+            img_info = await page.evaluate("""() => {
+                const ed = document.querySelector('.lite-editor__textarea.post_status');
+                if (!ed) return 'editor not found';
+                const imgs = ed.querySelectorAll('img');
+                const result = [];
+                imgs.forEach((img, i) => {
+                    result.push({
+                        index: i,
+                        src: img.src ? img.src.substring(0, 100) : 'no src',
+                        className: img.className,
+                        visible: img.offsetParent !== null,
+                        rect: img.getBoundingClientRect ? JSON.stringify({
+                            top: img.getBoundingClientRect().top,
+                            left: img.getBoundingClientRect().left,
+                            width: img.getBoundingClientRect().width,
+                            height: img.getBoundingClientRect().height
+                        }) : 'no rect'
+                    });
+                });
+                return JSON.stringify(result);
+            }""")
+            logger.info(f"Image elements in editor: {img_info}")
 
             submit_btn = await page.query_selector(".lite-editor__toolbar__post")
             if not submit_btn:

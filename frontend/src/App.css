@@ -351,6 +351,51 @@ body {
   height: 15px;
 }
 
+.llm-opt-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.trend-select {
+  display: flex;
+  gap: 4px;
+}
+
+.trend-btn {
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.trend-btn:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+.trend-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.trend-btn.bullish.active {
+  background: #e74c3c;
+  border-color: #e74c3c;
+}
+
+.trend-btn.bearish.active {
+  background: #27ae60;
+  border-color: #27ae60;
+}
+
 /* Stock Cards */
 .stock-cards {
   display: flex;

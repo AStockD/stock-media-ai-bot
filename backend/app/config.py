@@ -41,3 +41,6 @@ ASTOCKD_POSTER_API_TOKEN = os.getenv("ASTOCKD_POSTER_API_TOKEN", "")
 LLM_API_URL = os.getenv("LLM_API_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
+
+POSTER_CACHE_DIR = DATA_DIR / "poster_cache"
+POSTER_CACHE_DIR.mkdir(exist_ok=True)

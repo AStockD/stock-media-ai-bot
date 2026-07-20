@@ -39,10 +39,12 @@ export default function PostManagement({ token }: Props) {
   const [expandedChart, setExpandedChart] = useState<string | null>(null);
   const [posterUrl, setPosterUrl] = useState('');
   const [posterLoading, setPosterLoading] = useState(false);
+  const [posterLocalPath, setPosterLocalPath] = useState('');
   const [customStockMode, setCustomStockMode] = useState(false);
   const [customStockName, setCustomStockName] = useState('');
   const [llmOptimize, setLlmOptimize] = useState(true);
   const [llmOptimizing, setLlmOptimizing] = useState(false);
+  const [trendDirection, setTrendDirection] = useState<'auto' | 'bullish' | 'bearish'>('auto');
 
   const fetchData = useCallback(async () => {
     try {
@@ -90,6 +92,7 @@ export default function PostManagement({ token }: Props) {
     setPostContent('');
     setGeneratedStock('');
     setPosterUrl('');
+    setPosterLocalPath('');
   }
 
   async function handleCustomGenerate() {
@@ -98,6 +101,7 @@ export default function PostManagement({ token }: Props) {
     setAnalyzingCode('custom');
     setPosterLoading(true);
     setPosterUrl('');
+    setPosterLocalPath('');
     try {
       const resp = await stockSelectionApi.analyzeQuery(`看看${name}`, token, name);
       let content = resp.summary;
@@ -105,8 +109,14 @@ export default function PostManagement({ token }: Props) {
       if (llmOptimize) {
         setLlmOptimizing(true);
         try {
-          const optResp = await stockSelectionApi.optimizeContent(resp.summary, name, token);
+          const optResp = await stockSelectionApi.optimizeContent(resp.summary, name, token, trendDirection, resp.raw_summary);
           content = optResp.optimized_summary;
+          if (optResp.poster_url) {
+            setPosterUrl(optResp.poster_url);
+          }
+          if (optResp.poster_local_path) {
+            setPosterLocalPath(optResp.poster_local_path);
+          }
         } catch { /* fallback to original content */ }
         finally { setLlmOptimizing(false); }
       }
@@ -114,21 +124,24 @@ export default function PostManagement({ token }: Props) {
       setPostContent(content);
       setGeneratedStock(name);
 
-      const today = new Date().toISOString().split('T')[0];
-      const titleMatch = resp.summary.match(/^##\s+(.+)$/m);
-      const title = titleMatch ? titleMatch[1] : `${name}（${today}）`;
-      try {
-        const posterResp = await posterApi.generate(
-          title,
-          `分析一下${name}`,
-          resp.raw_summary,
-          'https://www.astockd.com',
-          token,
-        );
-        if (posterResp.code === 200 && posterResp.data?.url) {
-          setPosterUrl(posterResp.data.url);
-        }
-      } catch { /* poster generation failed, continue without image */ }
+      // Fallback poster generation if LLM optimization didn't provide one
+      if (!posterUrl) {
+        const today = new Date().toISOString().split('T')[0];
+        const titleMatch = resp.summary.match(/^##\s+(.+)$/m);
+        const title = titleMatch ? titleMatch[1] : `${name}（${today}）`;
+        try {
+          const posterResp = await posterApi.generate(
+            title,
+            `分析一下${name}`,
+            resp.raw_summary,
+            'https://www.astockd.com',
+            token,
+          );
+          if (posterResp.code === 200 && posterResp.data?.url) {
+            setPosterUrl(posterResp.data.url);
+          }
+        } catch { /* poster generation failed, continue without image */ }
+      }
     } catch { /* ignore */ }
     finally { setAnalyzingCode(''); setPosterLoading(false); }
   }
@@ -137,6 +150,7 @@ export default function PostManagement({ token }: Props) {
     setAnalyzingCode(record.code);
     setPosterLoading(true);
     setPosterUrl('');
+    setPosterLocalPath('');
     try {
       const resp = await stockSelectionApi.analyzeQuery(`看看${record.name}`, token, record.name);
       let content = resp.summary;
@@ -144,8 +158,14 @@ export default function PostManagement({ token }: Props) {
       if (llmOptimize) {
         setLlmOptimizing(true);
         try {
-          const optResp = await stockSelectionApi.optimizeContent(resp.summary, record.name, token);
+          const optResp = await stockSelectionApi.optimizeContent(resp.summary, record.name, token, trendDirection, resp.raw_summary);
           content = optResp.optimized_summary;
+          if (optResp.poster_url) {
+            setPosterUrl(optResp.poster_url);
+          }
+          if (optResp.poster_local_path) {
+            setPosterLocalPath(optResp.poster_local_path);
+          }
         } catch { /* fallback to original content */ }
         finally { setLlmOptimizing(false); }
       }
@@ -153,22 +173,24 @@ export default function PostManagement({ token }: Props) {
       setPostContent(content);
       setGeneratedStock(record.name);
 
-      // Generate poster
-      const today = new Date().toISOString().split('T')[0];
-      const titleMatch = resp.summary.match(/^##\s+(.+)$/m);
-      const title = titleMatch ? titleMatch[1] : `${record.name}（${today}）`;
-      try {
-        const posterResp = await posterApi.generate(
-          title,
-          `分析一下${record.name}这只股票`,
-          resp.raw_summary,
-          'https://www.astockd.com',
-          token,
-        );
-        if (posterResp.code === 200 && posterResp.data?.url) {
-          setPosterUrl(posterResp.data.url);
-        }
-      } catch { /* poster generation failed, continue without image */ }
+      // Fallback poster generation if LLM optimization didn't provide one
+      if (!posterUrl) {
+        const today = new Date().toISOString().split('T')[0];
+        const titleMatch = resp.summary.match(/^##\s+(.+)$/m);
+        const title = titleMatch ? titleMatch[1] : `${record.name}（${today}）`;
+        try {
+          const posterResp = await posterApi.generate(
+            title,
+            `分析一下${record.name}这只股票`,
+            resp.raw_summary,
+            'https://www.astockd.com',
+            token,
+          );
+          if (posterResp.code === 200 && posterResp.data?.url) {
+            setPosterUrl(posterResp.data.url);
+          }
+        } catch { /* poster generation failed, continue without image */ }
+      }
     } catch { /* ignore */ }
     finally { setAnalyzingCode(''); setPosterLoading(false); }
   }
@@ -181,7 +203,7 @@ export default function PostManagement({ token }: Props) {
     for (const pid of selectedPlatforms) {
       const info = PLATFORMS.find(p => p.id === pid);
       try {
-        const resp = await platformApi.createPost(pid, postContent, token, posterUrl || undefined);
+        const resp = await platformApi.createPost(pid, postContent, token, posterUrl || undefined, posterLocalPath || undefined);
         results.push({
           platform: info?.name || pid,
           success: resp.success,
@@ -238,14 +260,23 @@ export default function PostManagement({ token }: Props) {
           </div>
 
           {!customStockMode && selectedStrategy && (
-            <label className="llm-opt-toggle">
-              <input
-                type="checkbox"
-                checked={llmOptimize}
-                onChange={e => setLlmOptimize(e.target.checked)}
-              />
-              <span>LLM 优化内容</span>
-            </label>
+            <div className="llm-opt-row">
+              <label className="llm-opt-toggle">
+                <input
+                  type="checkbox"
+                  checked={llmOptimize}
+                  onChange={e => setLlmOptimize(e.target.checked)}
+                />
+                <span>LLM 优化</span>
+              </label>
+              {llmOptimize && (
+                <div className="trend-select">
+                  <button className={`trend-btn ${trendDirection === 'auto' ? 'active' : ''}`} onClick={() => setTrendDirection('auto')}>自动</button>
+                  <button className={`trend-btn bullish ${trendDirection === 'bullish' ? 'active' : ''}`} onClick={() => setTrendDirection('bullish')}>看多</button>
+                  <button className={`trend-btn bearish ${trendDirection === 'bearish' ? 'active' : ''}`} onClick={() => setTrendDirection('bearish')}>看空</button>
+                </div>
+              )}
+            </div>
           )}
 
           {customStockMode && (
@@ -267,14 +298,23 @@ export default function PostManagement({ token }: Props) {
                   {analyzingCode === 'custom' ? '...' : '生成'}
                 </button>
               </div>
-              <label className="llm-opt-toggle">
-                <input
-                  type="checkbox"
-                  checked={llmOptimize}
-                  onChange={e => setLlmOptimize(e.target.checked)}
-                />
-                <span>LLM 优化内容</span>
-              </label>
+              <div className="llm-opt-row">
+                <label className="llm-opt-toggle">
+                  <input
+                    type="checkbox"
+                    checked={llmOptimize}
+                    onChange={e => setLlmOptimize(e.target.checked)}
+                  />
+                  <span>LLM 优化</span>
+                </label>
+                {llmOptimize && (
+                  <div className="trend-select">
+                    <button className={`trend-btn ${trendDirection === 'auto' ? 'active' : ''}`} onClick={() => setTrendDirection('auto')}>自动</button>
+                    <button className={`trend-btn bullish ${trendDirection === 'bullish' ? 'active' : ''}`} onClick={() => setTrendDirection('bullish')}>看多</button>
+                    <button className={`trend-btn bearish ${trendDirection === 'bearish' ? 'active' : ''}`} onClick={() => setTrendDirection('bearish')}>看空</button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

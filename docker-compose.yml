@@ -7,6 +7,7 @@ services:
     ports:
       - "8002:8000"
     environment:
+      - TZ=Asia/Shanghai
       - DB_HOST=mysql8
       - DB_PORT=3306
       - DB_USER=smab

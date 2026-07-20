@@ -111,10 +111,10 @@ export const platformApi = {
   cancelLogin: (platform: string, token: string) =>
     post<{ status: string }>(`/api/platform/${platform}/login/cancel`, undefined, token),
 
-  createPost: (platform: string, content: string, token: string, imageUrl?: string) =>
+  createPost: (platform: string, content: string, token: string, imageUrl?: string, imagePath?: string) =>
     post<{ success: boolean; message?: string; url?: string; error?: string; post_id?: string }>(
       `/api/platform/${platform}/post`,
-      { content, image_url: imageUrl },
+      { content, image_url: imageUrl, image_path: imagePath },
       token,
     ),
 
@@ -145,8 +145,8 @@ export const stockSelectionApi = {
   analyzeQuery: (query: string, token: string, stockName?: string) =>
     post<{ summary: string; raw_summary: string }>('/api/stock-selection/analyze', { query, stock_name: stockName }, token),
 
-  optimizeContent: (summary: string, stockName: string, token: string) =>
-    post<{ optimized_summary: string }>('/api/stock-selection/optimize-content', { summary, stock_name: stockName }, token),
+  optimizeContent: (summary: string, stockName: string, token: string, trend: 'auto' | 'bullish' | 'bearish' = 'auto', rawSummary?: string) =>
+    post<{ optimized_summary: string; poster_url?: string; poster_local_path?: string }>('/api/stock-selection/optimize-content', { summary, stock_name: stockName, trend, raw_summary: rawSummary }, token),
 
   getKline: (code: string, token: string) =>
     get<{ klines: string[] }>(`/api/stock-selection/kline?code=${encodeURIComponent(code)}`, token),

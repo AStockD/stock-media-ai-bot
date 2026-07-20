@@ -45,8 +45,11 @@ class StockSelectionService:
         if stock_name:
             today = date.today().strftime("%Y/%m/%d")
             new_title = f"## A股道股票解读每日分享 - {stock_name}\n【{today}】"
-            summary = re.sub(r"^## [^\n]+", new_title, summary, count=1, flags=re.MULTILINE)
-            disclaimer = "\n\n*(免责申明: 本文解读内容均为 【A股道】AI 股票诊断生成，不构成投资建议，仅供参考！)*"
+            summary = re.sub(r"^## [^\n]+\n【[^\n]+】", new_title, summary, count=1, flags=re.MULTILINE)
+            # Fallback: if no 【date】 line found, just replace the title line
+            if "【" + today + "】" not in summary:
+                summary = re.sub(r"^## [^\n]+", new_title, summary, count=1, flags=re.MULTILINE)
+            disclaimer = "\n\n*(免责申明: 本文解读内容基于 【A股道】AI 股票诊断结果+个人总结分析，不构成投资建议，仅供参考！)*"
 
         summary = re.sub(
             r"^## 快速结论\n[\s\S]*?(?=^## |\Z)",
