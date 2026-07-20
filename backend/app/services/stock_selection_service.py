@@ -1,5 +1,7 @@
 """Stock selection records service - calls stock-diagnosis-app API."""
 import logging
+import re
+from datetime import date
 from typing import Dict, List
 
 import httpx
@@ -13,6 +15,7 @@ STRATEGIES = [
     {"id": "strategy_screener", "name": "策略选股"},
     {"id": "limitup_review", "name": "涨停复盘"},
     {"id": "market_review", "name": "市场复盘"},
+    {"id": "subscription_model", "name": "订阅模型"},
 ]
 
 
@@ -30,6 +33,48 @@ class StockSelectionService:
 
     def get_strategies(self) -> List[Dict]:
         return STRATEGIES
+
+    def analyze_query(self, query: str, stock_name: str = "") -> str:
+        resp = self._client.post("/analyze/query", json={"query": query}, timeout=300)
+        resp.raise_for_status()
+        data = resp.json()
+        summary = data.get("summary", "")
+
+        if stock_name:
+            today = date.today().strftime("%Y/%m/%d")
+            new_title = f"## A股道股票解读每日分享 - {today} - {stock_name}\n\n*(免责申明: 本文解读内容均为 【A股道】AI 股票诊断生成，不构成投资建议，仅供参考！)*"
+            summary = re.sub(r"^## [^\n]+", new_title, summary, count=1, flags=re.MULTILINE)
+
+        summary = re.sub(
+            r"^## 快速结论\n[\s\S]*?(?=^## |\Z)",
+            "",
+            summary,
+            flags=re.MULTILINE,
+        )
+
+        summary = re.sub(
+            r"^## 综合评分[^\n]*\n[\s\S]*?(?=^## |^> |^---|\Z)",
+            "",
+            summary,
+            flags=re.MULTILINE,
+        )
+
+        summary = re.sub(
+            r"^---\n+\s*免责申明[^\n]*\n+",
+            "",
+            summary,
+            flags=re.MULTILINE,
+        )
+
+        summary = re.sub(
+            r"\n?^## 斐波那契位置与策略\n[\s\S]*?(?=^## |\Z)",
+            "",
+            summary,
+            flags=re.MULTILINE,
+        )
+
+        logger.info(f"Analyze query='{query}', summary length={len(summary)}")
+        return summary
 
     def get_latest_records(self, source: str) -> List[Dict]:
         body = {"source": source} if source else {}

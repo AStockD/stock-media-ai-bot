@@ -13,6 +13,7 @@ services:
       - DB_PASSWORD=smab_pass_2026
       - DB_NAME=smab
       - JWT_SECRET=smab-prod-secret-change-me
+      - ASTOCKD_POSTER_API_TOKEN=${ASTOCKD_POSTER_API_TOKEN}
     volumes:
       - ./backend/data:/app/data
     networks:

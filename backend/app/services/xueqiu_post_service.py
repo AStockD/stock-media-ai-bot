@@ -96,6 +96,50 @@ class XueqiuPostService:
             tmp.close()
             return tmp.name
 
+    async def _upload_image_to_xueqiu(self, page, image_path: str) -> Optional[str]:
+        """Upload image directly via Xueqiu's upload API"""
+        try:
+            # Read image file
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+
+            # Get upload token
+            token_resp = await page.evaluate("""async () => {
+                const resp = await fetch('https://xueqiu.com/upload/token.json');
+                return await resp.json();
+            }""")
+            logger.info(f"Upload token response: {token_resp}")
+
+            if not token_resp or 'token' not in token_resp:
+                logger.error("Failed to get upload token")
+                return None
+
+            upload_token = token_resp['token']
+
+            # Upload image
+            upload_resp = await page.evaluate("""async (imageData, token) => {
+                const blob = new Blob([new Uint8Array(imageData)], {type: 'image/png'});
+                const formData = new FormData();
+                formData.append('file', blob, 'image.png');
+                formData.append('token', token);
+
+                const resp = await fetch('https://xueqiu.com/upload/image.json', {
+                    method: 'POST',
+                    body: formData
+                });
+                return await resp.json();
+            }""", list(image_data), upload_token)
+
+            logger.info(f"Image upload response: {upload_resp}")
+
+            if upload_resp and 'url' in upload_resp:
+                return upload_resp['url']
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to upload image via API: {e}")
+            return None
+
     async def create_post(self, user_id: int, content: str,
                           image_path: str = None, image_url: str = None,
                           platform: str = "xueqiu") -> dict:
@@ -109,9 +153,12 @@ class XueqiuPostService:
         try:
             if image_url and not image_path:
                 try:
+                    logger.info(f"Downloading image from: {image_url}")
                     downloaded_image = await self._download_image(image_url)
                     image_path = downloaded_image
+                    logger.info(f"Image downloaded to: {image_path}")
                 except Exception as e:
+                    logger.error(f"Failed to download image: {e}")
                     return {"success": False, "error": f"图片下载失败: {e}"}
 
             pw, browser, context, page = await self._setup_browser(storage_state_path)
@@ -136,24 +183,47 @@ class XueqiuPostService:
                 return {"success": False, "error": "未找到发帖编辑器"}
 
             if image_path:
+                logger.info(f"Uploading image: {image_path}")
                 img_path = Path(image_path)
                 if not img_path.exists():
                     await self._cleanup(pw, browser)
                     return {"success": False, "error": f"图片文件不存在: {image_path}"}
 
+                # Focus editor first
                 await editor.evaluate("e => { e.focus(); e.click(); }")
-                await page.wait_for_timeout(500)
+                await page.wait_for_timeout(1000)
 
-                upload_btn = await page.query_selector(".lite-editor__upload--img")
-                if not upload_btn:
-                    await self._cleanup(pw, browser)
-                    return {"success": False, "error": "未找到图片上传按钮"}
+                # Try to find and use the file input directly
+                file_input = await page.query_selector('input[type="file"][accept*="image"]')
+                if file_input:
+                    logger.info("Found file input, using setInputFiles")
+                    await file_input.set_input_files(str(img_path))
+                    await page.wait_for_timeout(8000)
+                else:
+                    # Fallback to clicking upload button
+                    upload_btn = await page.query_selector(".lite-editor__upload--img")
+                    if not upload_btn:
+                        logger.error("Image upload button not found")
+                        await self._cleanup(pw, browser)
+                        return {"success": False, "error": "未找到图片上传按钮"}
 
-                async with page.expect_file_chooser(timeout=10000) as fc_info:
-                    await upload_btn.evaluate("e => e.click()")
-                file_chooser = await fc_info.value
-                await file_chooser.set_files(str(img_path))
-                await page.wait_for_timeout(5000)
+                    logger.info("Clicking upload button and selecting file")
+                    async with page.expect_file_chooser(timeout=10000) as fc_info:
+                        await upload_btn.evaluate("e => e.click()")
+                    file_chooser = await fc_info.value
+                    await file_chooser.set_files(str(img_path))
+                    await page.wait_for_timeout(8000)
+
+                logger.info("Image upload wait complete")
+                await page.screenshot(path="/tmp/xq_after_image_upload.png")
+
+                # Check if image was actually added to editor
+                img_count = await page.evaluate("""() => {
+                    const editor = document.querySelector('.lite-editor__textarea.post_status');
+                    if (!editor) return 0;
+                    return editor.querySelectorAll('img').length;
+                }""")
+                logger.info(f"Images in editor after upload: {img_count}")
 
                 try:
                     await page.evaluate("""() => {

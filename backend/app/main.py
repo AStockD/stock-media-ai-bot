@@ -7,6 +7,8 @@ from app.database import init_db
 from app.routers.auth import router as auth_router
 from app.routers.platform import router as platform_router
 from app.routers.stock_selection import router as stock_selection_router
+from app.routers.poster import router as poster_router
+from app.services.heartbeat import start_heartbeat
 
 logging.basicConfig(level=logging.INFO)
 
@@ -23,11 +25,13 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     init_db()
+    start_heartbeat()
 
 
 app.include_router(auth_router)
 app.include_router(platform_router)
 app.include_router(stock_selection_router)
+app.include_router(poster_router)
 
 
 @app.get("/health")

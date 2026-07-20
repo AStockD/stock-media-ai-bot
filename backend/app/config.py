@@ -32,3 +32,8 @@ STOCK_ANALYZE_URL = os.getenv("STOCK_ANALYZE_URL", "http://10.0.0.135:8888")
 STOCK_ANALYZE_BEARER_TOKEN = os.getenv(
     "STOCK_ANALYZE_BEARER_TOKEN", "astk_d8a7f2e6b4c9103591d4e8b7a6c5f3d2"
 )
+
+ASTOCKD_POSTER_API_URL = os.getenv(
+    "ASTOCKD_POSTER_API_URL", "https://astockd.com/api/v1/operator/posters/generate"
+)
+ASTOCKD_POSTER_API_TOKEN = os.getenv("ASTOCKD_POSTER_API_TOKEN", "")

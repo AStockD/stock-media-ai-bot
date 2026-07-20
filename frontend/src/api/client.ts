@@ -1,4 +1,4 @@
-const BASE = '';
+const BASE = window.location.pathname.startsWith('/op') ? '/op' : '';
 
 async function post<T>(path: string, body?: unknown, token?: string): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -126,6 +126,29 @@ export const stockSelectionApi = {
   getRecords: (source: string, token: string) =>
     get<{ source: string; records: StockSelectionRecord[]; count: number }>(
       `/api/stock-selection/records?source=${encodeURIComponent(source)}`,
+      token,
+    ),
+
+  analyzeQuery: (query: string, token: string, stockName?: string) =>
+    post<{ summary: string }>('/api/stock-selection/analyze', { query, stock_name: stockName }, token),
+
+  getKline: (code: string, token: string) =>
+    get<{ klines: string[] }>(`/api/stock-selection/kline?code=${encodeURIComponent(code)}`, token),
+};
+
+export interface PosterData {
+  path: string;
+  absolute_path: string;
+  url: string;
+  width: number;
+  height: number;
+}
+
+export const posterApi = {
+  generate: (title: string, question: string, answer: string, qrUrl: string, token: string) =>
+    post<{ code: number; message: string; data: PosterData }>(
+      '/api/poster/generate',
+      { title, question, answer, qr_url: qrUrl },
       token,
     ),
 };
