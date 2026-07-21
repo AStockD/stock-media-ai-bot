@@ -11,6 +11,7 @@ interface PlatformInfo {
 
 const PLATFORMS: PlatformInfo[] = [
   { id: 'xueqiu', name: '雪球', icon: '❄️', color: '#2196F3' },
+  { id: 'joinquant', name: '聚宽', icon: '📊', color: '#4CAF50' },
 ];
 
 interface Props {
@@ -45,6 +46,7 @@ export default function PostManagement({ token }: Props) {
   const [llmOptimize, setLlmOptimize] = useState(true);
   const [llmOptimizing, setLlmOptimizing] = useState(false);
   const [trendDirection, setTrendDirection] = useState<'auto' | 'bullish' | 'bearish'>('auto');
+  const [jqPostUrl, setJqPostUrl] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -203,12 +205,21 @@ export default function PostManagement({ token }: Props) {
     for (const pid of selectedPlatforms) {
       const info = PLATFORMS.find(p => p.id === pid);
       try {
-        const resp = await platformApi.createPost(pid, postContent, token, posterUrl || undefined, posterLocalPath || undefined);
-        results.push({
-          platform: info?.name || pid,
-          success: resp.success,
-          message: resp.success ? (resp.message || 'Success') : (resp.error || 'Failed'),
-        });
+        if (pid === 'joinquant') {
+          const resp = await platformApi.createComment(pid, postContent, token, undefined, jqPostUrl || undefined, generatedStock || undefined);
+          results.push({
+            platform: info?.name || pid,
+            success: resp.success,
+            message: resp.success ? (resp.message || 'Success') : (resp.error || 'Failed'),
+          });
+        } else {
+          const resp = await platformApi.createPost(pid, postContent, token, posterUrl || undefined, posterLocalPath || undefined);
+          results.push({
+            platform: info?.name || pid,
+            success: resp.success,
+            message: resp.success ? (resp.message || 'Success') : (resp.error || 'Failed'),
+          });
+        }
       } catch (err: unknown) {
         results.push({
           platform: info?.name || pid,
@@ -425,16 +436,29 @@ export default function PostManagement({ token }: Props) {
                   />
                   <span className="pc-icon">{p.icon}</span>
                   <span className="pc-name">{p.name}</span>
+                  {p.id === 'joinquant' && <span className="pc-badge">评论</span>}
                 </label>
               );
             })}
           </div>
 
+          {selectedPlatforms.has('joinquant') && (
+            <div className="jq-url-row">
+              <input
+                type="text"
+                className="jq-post-url-input"
+                placeholder="聚宽帖子URL，如 https://www.joinquant.com/view/community/detail/xxx"
+                value={jqPostUrl}
+                onChange={e => setJqPostUrl(e.target.value)}
+              />
+            </div>
+          )}
+
           <div className="sticky-bottom">
             <button
               className="btn btn-primary btn-block"
               onClick={handleSend}
-              disabled={!postContent.trim() || selectedPlatforms.size === 0 || sending}
+              disabled={!postContent.trim() || selectedPlatforms.size === 0 || sending || (selectedPlatforms.has('joinquant') && !jqPostUrl.trim())}
             >
               {sending ? 'Sending...' : `发布到 ${selectedPlatforms.size} 个平台`}
             </button>

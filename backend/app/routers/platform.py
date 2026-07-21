@@ -12,12 +12,15 @@ from app.services.account_manager import AccountManager, account_manager
 from app.services.xueqiu_login_service import get_login_service
 from app.services.xueqiu_post_service import XueqiuPostService
 from app.services.xueqiu_comment_service import XueqiuCommentService
+from app.services.joinquant_login_service import get_joinquant_login_service
+from app.services.joinquant_comment_service import JoinQuantCommentService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/platform", tags=["platform"])
 
 post_service = XueqiuPostService(account_manager)
 comment_service = XueqiuCommentService(account_manager)
+jq_comment_service = JoinQuantCommentService(account_manager)
 
 _DATA_DIR = Path("/app/data")
 _POSTS_CACHE_FILE = _DATA_DIR / "posts_cache.json"
@@ -46,6 +49,10 @@ async def list_accounts(user: dict = Depends(get_current_user)):
 
 @router.post("/{platform}/login/start")
 async def start_login(platform: str, user: dict = Depends(get_current_user)):
+    if platform == "joinquant":
+        jq_login_svc = get_joinquant_login_service(account_manager)
+        return await jq_login_svc.start_login(user["id"], platform)
+
     login_svc = get_login_service(account_manager)
     result = await login_svc.start_login(user["id"], platform)
 
@@ -65,12 +72,18 @@ async def start_login(platform: str, user: dict = Depends(get_current_user)):
 
 @router.get("/{platform}/login/status")
 async def login_status(platform: str, user: dict = Depends(get_current_user)):
+    if platform == "joinquant":
+        jq_login_svc = get_joinquant_login_service(account_manager)
+        return await jq_login_svc.get_status(user["id"], platform)
     login_svc = get_login_service(account_manager)
     return await login_svc.get_status(user["id"], platform)
 
 
 @router.post("/{platform}/login/cancel")
 async def cancel_login(platform: str, user: dict = Depends(get_current_user)):
+    if platform == "joinquant":
+        jq_login_svc = get_joinquant_login_service(account_manager)
+        return await jq_login_svc.cancel_login(user["id"], platform)
     login_svc = get_login_service(account_manager)
     return await login_svc.cancel_login(user["id"], platform)
 
@@ -226,6 +239,21 @@ async def create_comment(platform: str, req: dict, user: dict = Depends(get_curr
     content = req.get("content")
     post_title = req.get("post_title")
     reply_to_comment_id = req.get("reply_to_comment_id")
+
+    if platform == "joinquant":
+        if not content:
+            raise HTTPException(400, "content is required")
+        if not post_url and not post_id:
+            raise HTTPException(400, "post_url or post_id is required")
+        return await jq_comment_service.create_comment(
+            user_id=user["id"],
+            post_url=post_url or "",
+            content=content,
+            platform=platform,
+            post_id=str(post_id) if post_id else None,
+            post_title=post_title,
+        )
+
     if not content:
         raise HTTPException(400, "content is required")
     if not post_id and not post_url:

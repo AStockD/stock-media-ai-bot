@@ -627,6 +627,35 @@ body {
   font-weight: 500;
 }
 
+.pc-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  background: var(--platform-color, var(--primary));
+  color: #fff;
+  border-radius: 8px;
+  margin-left: 2px;
+}
+
+.jq-url-row {
+  margin-bottom: 16px;
+}
+
+.jq-post-url-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  background: var(--bg-card);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
+.jq-post-url-input:focus {
+  outline: none;
+  border-color: #4CAF50;
+}
+
 /* Post Results */
 .post-results {
   margin-top: 16px;
