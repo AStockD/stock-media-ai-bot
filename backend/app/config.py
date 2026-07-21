@@ -17,21 +17,23 @@ USER_AGENT = (
 XUEQIU_BASE_URL = "https://xueqiu.com"
 XUEQIU_LOGIN_URL = "https://xueqiu.com"
 
-DB_HOST = os.getenv("DB_HOST", "10.0.0.135")
+JQ_LOGIN_URL = "https://www.joinquant.com/user/login/index"
+JQ_USERNAME = os.getenv("JQ_USERNAME", "")
+JQ_PASSWORD = os.getenv("JQ_PASSWORD", "")
+
+DB_HOST = os.getenv("DB_HOST", "")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
-DB_USER = os.getenv("DB_USER", "smab")
+DB_USER = os.getenv("DB_USER", "")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 DB_NAME = os.getenv("DB_NAME", "smab")
 ASTOCKD_DB_NAME = os.getenv("ASTOCKD_DB_NAME", "astockd")
 
-JWT_SECRET = os.getenv("JWT_SECRET", "smab-dev-secret-change-in-prod")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 72
 
-STOCK_ANALYZE_URL = os.getenv("STOCK_ANALYZE_URL", "http://10.0.0.135:8888")
-STOCK_ANALYZE_BEARER_TOKEN = os.getenv(
-    "STOCK_ANALYZE_BEARER_TOKEN", "astk_d8a7f2e6b4c9103591d4e8b7a6c5f3d2"
-)
+STOCK_ANALYZE_URL = os.getenv("STOCK_ANALYZE_URL", "")
+STOCK_ANALYZE_BEARER_TOKEN = os.getenv("STOCK_ANALYZE_BEARER_TOKEN", "")
 
 ASTOCKD_POSTER_API_URL = os.getenv(
     "ASTOCKD_POSTER_API_URL", "https://astockd.com/api/v1/operator/posters/generate"

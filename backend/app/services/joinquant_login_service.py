@@ -6,13 +6,10 @@ from typing import Dict, Optional
 
 from playwright.async_api import async_playwright, Browser
 
+from app.config import JQ_LOGIN_URL, JQ_USERNAME, JQ_PASSWORD
 from app.services.account_manager import AccountManager
 
 logger = logging.getLogger(__name__)
-
-JQ_LOGIN_URL = "https://www.joinquant.com/user/login/index"
-JQ_USERNAME = "18165764349"
-JQ_PASSWORD = "AStockD.com123"
 
 STEALTH_SCRIPT = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});

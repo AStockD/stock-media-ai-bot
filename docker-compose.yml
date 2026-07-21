@@ -16,6 +16,10 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - ASTOCKD_POSTER_API_TOKEN=${ASTOCKD_POSTER_API_TOKEN}
       - LLM_API_KEY=${LLM_API_KEY}
+      - STOCK_ANALYZE_URL=${STOCK_ANALYZE_URL}
+      - STOCK_ANALYZE_BEARER_TOKEN=${STOCK_ANALYZE_BEARER_TOKEN}
+      - JQ_USERNAME=${JQ_USERNAME}
+      - JQ_PASSWORD=${JQ_PASSWORD}
     volumes:
       - ./backend/data:/app/data
     networks:
