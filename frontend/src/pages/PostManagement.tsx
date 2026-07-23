@@ -47,6 +47,11 @@ export default function PostManagement({ token }: Props) {
   const [llmOptimizing, setLlmOptimizing] = useState(false);
   const [trendDirection, setTrendDirection] = useState<'auto' | 'bullish' | 'bearish'>('auto');
   const [jqPostUrl, setJqPostUrl] = useState('');
+  const [captchaData, setCaptchaData] = useState<{bgImg: string; hqImg: string; bgImgW: number} | null>(null);
+  const [captchaDragging, setCaptchaDragging] = useState(false);
+  const [captchaX, setCaptchaX] = useState(0);
+  const [captchaStartX, setCaptchaStartX] = useState(0);
+  const [captchaStatus, setCaptchaStatus] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -60,6 +65,57 @@ export default function PostManagement({ token }: Props) {
   }, [token]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval>;
+    if (sending) {
+      timer = setInterval(async () => {
+        try {
+          const resp = await fetch('/api/platform/joinquant/captcha-status', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await resp.json();
+          const status = data.status;
+          if (status && status.status === 'waiting' && status.bgImg) {
+            setCaptchaData({ bgImg: status.bgImg, hqImg: status.hqImg, bgImgW: status.bgImgW });
+            setCaptchaStatus('waiting');
+          } else if (status && status.status !== 'waiting' && captchaData) {
+            setCaptchaData(null);
+            setCaptchaStatus('');
+            setCaptchaX(0);
+          }
+        } catch { /* ignore */ }
+      }, 1000);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [sending, token]);
+
+  const handleCaptchaMouseDown = (e: React.MouseEvent) => {
+    setCaptchaDragging(true);
+    setCaptchaStartX(e.clientX - captchaX);
+  };
+
+  const handleCaptchaMouseMove = (e: React.MouseEvent) => {
+    if (!captchaDragging || !captchaData) return;
+    const newX = Math.max(0, Math.min(e.clientX - captchaStartX, captchaData.bgImgW - 42));
+    setCaptchaX(newX);
+  };
+
+  const handleCaptchaMouseUp = async () => {
+    if (!captchaDragging) return;
+    setCaptchaDragging(false);
+    setCaptchaStatus('submitting');
+    try {
+      await fetch('/api/platform/joinquant/captcha-solve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ axisX: captchaX }),
+      });
+      setCaptchaStatus('submitted');
+    } catch {
+      setCaptchaStatus('error');
+    }
+  };
 
   const validAccounts = accounts.filter(a => a.is_valid);
 
@@ -205,8 +261,8 @@ export default function PostManagement({ token }: Props) {
     for (const pid of selectedPlatforms) {
       const info = PLATFORMS.find(p => p.id === pid);
       try {
-        if (pid === 'joinquant') {
-          const resp = await platformApi.createComment(pid, postContent, token, undefined, jqPostUrl || undefined, generatedStock || undefined);
+        if (pid === 'joinquant' && jqPostUrl.trim()) {
+          const resp = await platformApi.createComment(pid, postContent, token, undefined, jqPostUrl, generatedStock || undefined);
           results.push({
             platform: info?.name || pid,
             success: resp.success,
@@ -238,6 +294,75 @@ export default function PostManagement({ token }: Props) {
 
   return (
     <div className="post-mgmt">
+      {captchaData && captchaStatus === 'waiting' && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 12, padding: 24, minWidth: 400,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+          }}>
+            <h3 style={{ margin: '0 0 16px', textAlign: 'center' }}>请拖动滑块完成验证</h3>
+            <div style={{ position: 'relative', marginBottom: 16 }}>
+              <img
+                src={`data:image/png;base64,${captchaData.bgImg}`}
+                style={{ width: captchaData.bgImgW, height: 142, display: 'block', borderRadius: 4 }}
+                alt="captcha background"
+              />
+              <img
+                src={`data:image/png;base64,${captchaData.hqImg}`}
+                style={{
+                  position: 'absolute', top: 0, left: captchaX,
+                  height: 142, pointerEvents: 'none',
+                }}
+                alt="captcha piece"
+              />
+            </div>
+            <div
+              onMouseDown={handleCaptchaMouseDown}
+              onMouseMove={handleCaptchaMouseMove}
+              onMouseUp={handleCaptchaMouseUp}
+              onMouseLeave={() => captchaDragging && handleCaptchaMouseUp()}
+              style={{
+                position: 'relative', height: 40, background: '#e8e8e8',
+                borderRadius: 20, cursor: 'grab', userSelect: 'none',
+              }}
+            >
+              <div style={{
+                position: 'absolute', top: 0, left: 0, height: '100%',
+                width: captchaX + 42, background: '#4CAF50',
+                borderRadius: 20, opacity: 0.3,
+              }} />
+              <div style={{
+                position: 'absolute', top: 0, left: captchaX,
+                width: 42, height: 42, background: '#4CAF50',
+                borderRadius: '50%', cursor: 'grab',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#fff', fontSize: 18, fontWeight: 'bold',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+              }}>
+                →
+              </div>
+            </div>
+            <p style={{ textAlign: 'center', color: '#666', marginTop: 12, fontSize: 13 }}>
+              按住滑块向右拖动到缺口位置
+            </p>
+          </div>
+        </div>
+      )}
+      {captchaData && captchaStatus === 'submitting' && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 24 }}>
+            <p>正在提交验证...</p>
+          </div>
+        </div>
+      )}
       <div className="step-bar">
         <div className={`step-item ${step >= 1 ? 'active' : ''}`} onClick={() => setStep(1)}>
           <span className="step-num">1</span>
@@ -436,7 +561,7 @@ export default function PostManagement({ token }: Props) {
                   />
                   <span className="pc-icon">{p.icon}</span>
                   <span className="pc-name">{p.name}</span>
-                  {p.id === 'joinquant' && <span className="pc-badge">评论</span>}
+                  {p.id === 'joinquant' && <span className="pc-badge">发帖/评论</span>}
                 </label>
               );
             })}
@@ -447,7 +572,7 @@ export default function PostManagement({ token }: Props) {
               <input
                 type="text"
                 className="jq-post-url-input"
-                placeholder="聚宽帖子URL，如 https://www.joinquant.com/view/community/detail/xxx"
+                placeholder="评论模式：填入聚宽帖子URL（留空则为发帖模式）"
                 value={jqPostUrl}
                 onChange={e => setJqPostUrl(e.target.value)}
               />
@@ -458,7 +583,7 @@ export default function PostManagement({ token }: Props) {
             <button
               className="btn btn-primary btn-block"
               onClick={handleSend}
-              disabled={!postContent.trim() || selectedPlatforms.size === 0 || sending || (selectedPlatforms.has('joinquant') && !jqPostUrl.trim())}
+              disabled={!postContent.trim() || selectedPlatforms.size === 0 || sending}
             >
               {sending ? 'Sending...' : `发布到 ${selectedPlatforms.size} 个平台`}
             </button>

@@ -18,8 +18,6 @@ XUEQIU_BASE_URL = "https://xueqiu.com"
 XUEQIU_LOGIN_URL = "https://xueqiu.com"
 
 JQ_LOGIN_URL = "https://www.joinquant.com/user/login/index"
-JQ_USERNAME = os.getenv("JQ_USERNAME", "")
-JQ_PASSWORD = os.getenv("JQ_PASSWORD", "")
 
 DB_HOST = os.getenv("DB_HOST", "")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
