@@ -8,18 +8,16 @@ services:
       - "8002:8000"
     environment:
       - TZ=Asia/Shanghai
-      - DB_HOST=mysql8
-      - DB_PORT=3306
-      - DB_USER=smab
+      - DB_HOST=${DB_HOST:-mysql8}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-smab}
       - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=smab
+      - DB_NAME=${DB_NAME:-smab}
       - JWT_SECRET=${JWT_SECRET}
       - ASTOCKD_POSTER_API_TOKEN=${ASTOCKD_POSTER_API_TOKEN}
       - LLM_API_KEY=${LLM_API_KEY}
       - STOCK_ANALYZE_URL=${STOCK_ANALYZE_URL}
       - STOCK_ANALYZE_BEARER_TOKEN=${STOCK_ANALYZE_BEARER_TOKEN}
-      - JQ_USERNAME=${JQ_USERNAME}
-      - JQ_PASSWORD=${JQ_PASSWORD}
     volumes:
       - ./backend/data:/app/data
     networks:

@@ -14,6 +14,7 @@ from app.services.xueqiu_post_service import XueqiuPostService
 from app.services.xueqiu_comment_service import XueqiuCommentService
 from app.services.joinquant_login_service import get_joinquant_login_service
 from app.services.joinquant_comment_service import JoinQuantCommentService
+from app.services.joinquant_post_service import JoinQuantPostService, set_captcha_state, get_captcha_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/platform", tags=["platform"])
@@ -21,6 +22,35 @@ router = APIRouter(prefix="/api/platform", tags=["platform"])
 post_service = XueqiuPostService(account_manager)
 comment_service = XueqiuCommentService(account_manager)
 jq_comment_service = JoinQuantCommentService(account_manager)
+jq_post_service = JoinQuantPostService(account_manager)
+
+@router.get("/joinquant/captcha-status")
+async def get_captcha_status(user: dict = Depends(get_current_user)):
+    status = get_captcha_state(user["id"])
+    return {"status": status}
+
+@router.post("/joinquant/captcha-solve")
+async def submit_captcha_solution(data: dict, user: dict = Depends(get_current_user)):
+    axis_x = data.get("axisX")
+    if axis_x is None:
+        raise HTTPException(400, "axisX required")
+    
+    state = get_captcha_state(user["id"])
+    if not state or state.get("status") != "waiting":
+        raise HTTPException(400, "No CAPTCHA waiting")
+    
+    state["axisX"] = axis_x
+    state["status"] = "solved"
+    return {"status": "ok"}
+
+@router.post("/joinquant/login/captcha-validate")
+async def login_captcha_validate(data: dict, user: dict = Depends(get_current_user)):
+    axis_x = data.get("axisX")
+    if axis_x is None:
+        raise HTTPException(400, "axisX required")
+    
+    jq_login_svc = get_joinquant_login_service(account_manager)
+    return await jq_login_svc.validate_captcha(user["id"], "joinquant", int(axis_x))
 
 _DATA_DIR = Path("/app/data")
 _POSTS_CACHE_FILE = _DATA_DIR / "posts_cache.json"
@@ -48,10 +78,12 @@ async def list_accounts(user: dict = Depends(get_current_user)):
 
 
 @router.post("/{platform}/login/start")
-async def start_login(platform: str, user: dict = Depends(get_current_user)):
+async def start_login(platform: str, req: dict = {}, user: dict = Depends(get_current_user)):
     if platform == "joinquant":
         jq_login_svc = get_joinquant_login_service(account_manager)
-        return await jq_login_svc.start_login(user["id"], platform)
+        username = req.get("username", "")
+        password = req.get("password", "")
+        return await jq_login_svc.start_login(user["id"], platform, username=username, password=password)
 
     login_svc = get_login_service(account_manager)
     result = await login_svc.start_login(user["id"], platform)
@@ -93,8 +125,16 @@ async def create_post(platform: str, req: dict, user: dict = Depends(get_current
     content = req.get("content")
     image_path = req.get("image_path")
     image_url = req.get("image_url")
+    title = req.get("title")
     if not content:
         raise HTTPException(400, "content is required")
+    if platform == "joinquant":
+        return await jq_post_service.create_post(
+            user_id=user["id"],
+            content=content,
+            title=title,
+            platform=platform,
+        )
     return await post_service.create_post(
         user_id=user["id"],
         content=content,

@@ -57,6 +57,16 @@ export interface LoginStartResponse {
   qr_image?: string;
   message?: string;
   error?: string;
+  captcha_data?: {
+    bgImg: string;
+    hqImg: string;
+    bgImgW: number;
+    bgImgH: number;
+    blockW: number;
+    blockH: number;
+    point: number[];
+    axisY: number;
+  };
 }
 
 export interface LoginStatusResponse {
@@ -102,8 +112,8 @@ export const platformApi = {
   getAccounts: (token: string) =>
     get<{ accounts: PlatformAccount[] }>('/api/platform/accounts', token),
 
-  startLogin: (platform: string, token: string) =>
-    post<LoginStartResponse>(`/api/platform/${platform}/login/start`, undefined, token),
+  startLogin: (platform: string, token: string, credentials?: { username: string; password: string }) =>
+    post<LoginStartResponse>(`/api/platform/${platform}/login/start`, credentials, token),
 
   loginStatus: (platform: string, token: string) =>
     get<LoginStatusResponse>(`/api/platform/${platform}/login/status`, token),
@@ -111,10 +121,14 @@ export const platformApi = {
   cancelLogin: (platform: string, token: string) =>
     post<{ status: string }>(`/api/platform/${platform}/login/cancel`, undefined, token),
 
-  createPost: (platform: string, content: string, token: string, imageUrl?: string, imagePath?: string) =>
+  validateLoginCaptcha: (token: string, axisX: number) =>
+    post<{ status: string; error?: string; cookie_count?: number; captcha_data?: any; message?: string }>(
+      '/api/platform/joinquant/login/captcha-validate', { axisX }, token),
+
+  createPost: (platform: string, content: string, token: string, imageUrl?: string, imagePath?: string, title?: string) =>
     post<{ success: boolean; message?: string; url?: string; error?: string; post_id?: string }>(
       `/api/platform/${platform}/post`,
-      { content, image_url: imageUrl, image_path: imagePath },
+      { content, image_url: imageUrl, image_path: imagePath, title },
       token,
     ),
 

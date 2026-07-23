@@ -37,6 +37,67 @@ def _check_xueqiu(cookies: dict) -> bool:
         return False
 
 
+def _check_joinquant(cookies: dict) -> bool:
+    """Check JoinQuant login status using Playwright to load page and check for login button."""
+    import asyncio
+    from playwright.async_api import async_playwright
+    
+    async def _check():
+        pw = None
+        browser = None
+        try:
+            pw = await async_playwright().start()
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
+            )
+            
+            # Build cookie list for context
+            cookie_list = [{'name': k, 'value': v, 'domain': '.joinquant.com', 'path': '/'} for k, v in cookies.items()]
+            
+            context = await browser.new_context(
+                viewport={'width': 1440, 'height': 900},
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+            )
+            await context.add_cookies(cookie_list)
+            
+            page = await context.new_page()
+            await page.goto('https://www.joinquant.com/view/community/list', wait_until='networkidle', timeout=30000)
+            await page.wait_for_timeout(3000)
+            
+            # Check if login button is present
+            has_login = await page.evaluate('''() => {
+                const text = document.body.innerText;
+                return text.includes('登录') || text.includes('立即登录');
+            }''')
+            
+            await context.close()
+            return not has_login  # If no login button, cookies are valid
+            
+        except Exception as e:
+            logger.warning(f"JoinQuant heartbeat check failed: {e}")
+            return False
+        finally:
+            if browser:
+                try:
+                    await browser.close()
+                except:
+                    pass
+            if pw:
+                try:
+                    await pw.stop()
+                except:
+                    pass
+    
+    # Run async function in sync context
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_check())
+    finally:
+        loop.close()
+
+
 def _run_check():
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -53,6 +114,8 @@ def _run_check():
 
         if platform == "xueqiu":
             valid = _check_xueqiu(cookies)
+        elif platform == "joinquant":
+            valid = _check_joinquant(cookies)
         else:
             continue
 

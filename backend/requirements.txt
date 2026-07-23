@@ -8,3 +8,5 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 openai==1.58.0
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
