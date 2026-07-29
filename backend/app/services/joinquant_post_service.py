@@ -1,27 +1,18 @@
-"""JoinQuant post creation service with OpenCV-based sliding CAPTCHA solving."""
+"""JoinQuant post creation service with two-phase CAPTCHA support."""
 import asyncio
 import base64
 import json
 import logging
-import math
-import random
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Dict, Optional
 
-import cv2
-import numpy as np
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Browser
 
 from app.services.account_manager import AccountManager
+from app.services.jq_captcha_service import JoinQuantCaptchaService
 from app.services.jq_captcha_solver import find_gap_x as shared_find_gap_x, generate_trajectory as shared_generate_trajectory
-
-_captcha_state = {}
-
-def set_captcha_state(user_id: int, state: dict):
-    _captcha_state[user_id] = state
-
-def get_captcha_state(user_id: int) -> dict:
-    return _captcha_state.get(user_id, {})
 
 logger = logging.getLogger(__name__)
 
@@ -38,75 +29,44 @@ USER_AGENT = (
 )
 
 JQ_EDIT_URL = "https://www.joinquant.com/view/community/edit?postType=edit"
+SESSION_TIMEOUT = 120
 
 
-def _fix_b64_padding(b64str: str) -> str:
-    """Add missing padding to base64 string and strip data URI prefix."""
-    b64str = b64str.strip()
-    # Strip data URI prefix if present
-    if b64str.startswith('data:'):
-        b64str = b64str.split(',', 1)[1] if ',' in b64str else b64str
-    missing_padding = len(b64str) % 4
-    if missing_padding:
-        b64str += '=' * (4 - missing_padding)
-    return b64str
+@dataclass
+class PostSession:
+    user_id: int
+    platform: str
+    pw_instance: object = None
+    browser: Optional[Browser] = None
+    context: object = None
+    page: object = None
+    captcha_data: Optional[dict] = field(default=None)
+    created_at: float = field(default_factory=time.time)
 
 
-def _find_gap_x(bg_img_b64: str, piece_img_b64: str) -> int:
-    """Use OpenCV to find the X offset of the puzzle gap in the background image."""
-    bg_bytes = base64.b64decode(_fix_b64_padding(bg_img_b64))
-    piece_bytes = base64.b64decode(_fix_b64_padding(piece_img_b64))
-
-    bg_arr = np.frombuffer(bg_bytes, dtype=np.uint8)
-    piece_arr = np.frombuffer(piece_bytes, dtype=np.uint8)
-
-    bg = cv2.imdecode(bg_arr, cv2.IMREAD_COLOR)
-    piece = cv2.imdecode(piece_arr, cv2.IMREAD_COLOR)
-
-    if bg is None or piece is None:
-        raise ValueError("Failed to decode CAPTCHA images")
-
-    bg_gray = cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY)
-    piece_gray = cv2.cvtColor(piece, cv2.COLOR_BGR2GRAY)
-
-    ph, pw = piece_gray.shape[:2]
-    
-    bg_blur = cv2.GaussianBlur(bg_gray, (3, 3), 0)
-    piece_blur = cv2.GaussianBlur(piece_gray, (3, 3), 0)
-    
-    result = cv2.matchTemplate(bg_blur, piece_blur, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(result)
-    
-    gap_x = max_loc[0]
-    logger.info(f"Gap found via template matching at x={gap_x} (confidence={max_val:.3f}, piece_size={pw}x{ph})")
-    return gap_x
+_sessions: Dict[int, PostSession] = {}
 
 
-def _generate_trajectory(distance: int) -> list[dict]:
-    """Generate a human-like mouse drag trajectory."""
-    points = []
-    total_steps = random.randint(25, 40)
-    overshoot = random.randint(5, 15) if distance > 50 else 0
+def _cleanup_expired_sessions():
+    now = time.time()
+    expired = [uid for uid, s in _sessions.items() if now - s.created_at > SESSION_TIMEOUT]
+    for uid in expired:
+        session = _sessions.pop(uid)
+        logger.info(f"Cleaning up expired post session for user {uid}")
+        asyncio.ensure_future(_cleanup_post_session(session))
 
-    for i in range(total_steps):
-        t = i / (total_steps - 1)
-        progress = 1 - math.pow(1 - t, 3)
-        x = distance * progress
-        jitter = random.uniform(-1.5, 1.5) if 0.1 < t < 0.9 else 0
-        points.append({"x": max(0, x + jitter), "t": t})
 
-    if overshoot:
-        for j in range(5):
-            t = 1.0 + (j + 1) * 0.03
-            x = distance + overshoot * (1 - j / 4)
-            points.append({"x": x, "t": t})
-        for j in range(5):
-            t = 1.15 + (j + 1) * 0.03
-            x = distance - overshoot * (j / 4) * 0.3
-            points.append({"x": x, "t": t})
-
-    points.append({"x": distance, "t": 1.3})
-    return points
+async def _cleanup_post_session(session: PostSession):
+    try:
+        if session.browser and session.browser.is_connected():
+            await session.browser.close()
+    except Exception:
+        pass
+    try:
+        if session.pw_instance:
+            await session.pw_instance.stop()
+    except Exception:
+        pass
 
 
 class JoinQuantPostService:
@@ -128,26 +88,144 @@ class JoinQuantPostService:
         page = await context.new_page()
         return pw, browser, context, page
 
-    async def _cleanup(self, pw, browser):
-        if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
-        if pw:
-            try:
-                await pw.stop()
-            except Exception:
-                pass
-
     async def _save_cookies(self, user_id, platform, context):
         new_storage = await context.storage_state()
         cookies_list = await context.cookies()
         cookies_dict = {c["name"]: c["value"] for c in cookies_list}
         self.account_manager.save_cookies(user_id, platform, cookies_dict, new_storage)
 
-    async def _solve_captcha(self, page, pre_captured_data: dict = None, user_id: int = None) -> str | None:
-        """Solve the sliding CAPTCHA and return the token, or None on failure."""
+    async def _upload_image(self, page, image_path: str = None, image_url: str = None) -> dict:
+        """Upload image to JoinQuant editor via MarkKook insert image dialog.
+
+        Supports local file path or URL (downloaded to temp file first).
+        Returns upload result dict from the API.
+        """
+        import tempfile
+        import httpx
+
+        local_path = image_path
+        tmp_path = None
+
+        if image_url and not image_path:
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(image_url)
+                    resp.raise_for_status()
+                suffix = ".png"
+                if ".jpg" in image_url or ".jpeg" in image_url:
+                    suffix = ".jpg"
+                elif ".gif" in image_url:
+                    suffix = ".gif"
+                elif ".webp" in image_url:
+                    suffix = ".webp"
+                tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+                tmp.write(resp.content)
+                tmp.close()
+                tmp_path = tmp.name
+                local_path = tmp_path
+                logger.info(f"Downloaded image from URL to {local_path} ({len(resp.content)} bytes)")
+            except Exception as e:
+                logger.error(f"Failed to download image from URL: {e}")
+                return {"success": False, "error": str(e)}
+
+        if not local_path:
+            return {"success": False, "error": "No image path or URL provided"}
+
+        if not Path(local_path).exists():
+            logger.warning(f"Image file not found: {local_path}")
+            return {"success": False, "error": f"File not found: {local_path}"}
+
+        upload_result = {}
+
+        async def on_upload_response(response):
+            if "common/img/upload" in response.url and response.request.method == "POST":
+                try:
+                    body = await response.json()
+                    upload_result.update(body)
+                    logger.info(f"Image upload API: {response.status} -> {body.get('url', '')[:100]}")
+                except Exception:
+                    pass
+
+        page.on("response", on_upload_response)
+
+        try:
+            debug_info = await page.evaluate("""() => {
+                const inputs = document.querySelectorAll('input[type="file"]');
+                return Array.from(inputs).map(i => ({
+                    accept: i.accept,
+                    name: i.name,
+                    class: i.className,
+                    parentClass: i.parentElement?.className || '',
+                    hidden: i.closest('.ck-hidden') !== null || getComputedStyle(i).display === 'none',
+                }));
+            }""")
+            logger.info(f"File inputs on page: {json.dumps(debug_info)}")
+
+            opened = await page.evaluate("""() => {
+                const editEl = document.querySelector('.jq-comunity-edit');
+                const vm = editEl && editEl.__vue__;
+                const mk = vm?.$refs?.MarkKookComponent;
+                if (mk) {
+                    mk.showInsertImgDialog();
+                    return 'markkook_dialog_opened';
+                }
+                return 'no_markkook';
+            }""")
+            logger.info(f"Dialog open result: {opened}")
+            await page.wait_for_timeout(1500)
+
+            dialog_file = page.locator('.el-dialog__wrapper:visible input[type="file"]')
+            count = await dialog_file.count()
+            logger.info(f"Visible dialog file inputs: {count}")
+
+            if count > 0:
+                await dialog_file.first.set_input_files(local_path)
+                logger.info("File set on dialog input, waiting for upload...")
+                await page.wait_for_timeout(3000)
+
+                if upload_result:
+                    confirm_clicked = await page.evaluate("""() => {
+                        const wrappers = document.querySelectorAll('.el-dialog__wrapper');
+                        for (const w of wrappers) {
+                            if (w.style.display === 'none') continue;
+                            const title = w.querySelector('.el-dialog__title')?.textContent || '';
+                            if (title.includes('图片')) {
+                                const confirmBtn = w.querySelector('.dialog-footer .jq-c-button_primary');
+                                if (confirmBtn) { confirmBtn.click(); return 'clicked'; }
+                            }
+                        }
+                        return 'no_confirm_btn';
+                    }""")
+                    logger.info(f"Confirm button: {confirm_clicked}")
+                    await page.wait_for_timeout(1000)
+                    return {"success": True, **upload_result}
+
+            ck_file = page.locator('.ck-file-dialog-button input[type="file"]')
+            ck_count = await ck_file.count()
+            logger.info(f"CKEditor file inputs: {ck_count}")
+            if ck_count > 0:
+                await ck_file.first.set_input_files(local_path)
+                await page.wait_for_timeout(3000)
+                if upload_result:
+                    return {"success": True, **upload_result}
+
+            logger.warning("No file input found for image upload")
+            return {"success": False, "error": "No file input found in editor"}
+        except Exception as e:
+            logger.error(f"Image upload failed: {e}")
+            return {"success": False, "error": str(e)}
+        finally:
+            page.remove_listener("response", on_upload_response)
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    async def _solve_captcha_auto(self, page, pre_captured_data: dict = None) -> str | None:
+        """Auto-solve CAPTCHA using OpenCV. Returns token or None."""
+        import random
+
         api_response_data = dict(pre_captured_data) if pre_captured_data else {}
 
         async def on_captcha_response(response):
@@ -165,19 +243,13 @@ class JoinQuantPostService:
             const editEl = document.querySelector('.jq-comunity-edit');
             const editVm = editEl && editEl.__vue__;
             if (!editVm) return null;
-            
             const captchaDialog = editVm.$refs && editVm.$refs.validCodeDiloag;
             if (captchaDialog && captchaDialog.$data) {
                 const data = captchaDialog.$data;
                 if (data.bgImg && data.hqImg) {
-                    return {
-                        bgImg: data.bgImg,
-                        hqImg: data.hqImg,
-                        bgImgW: data.bgImgW || 320
-                    };
+                    return { bgImg: data.bgImg, hqImg: data.hqImg, bgImgW: data.bgImgW || 320 };
                 }
             }
-            
             return null;
         }""")
 
@@ -188,23 +260,14 @@ class JoinQuantPostService:
                     const editEl = document.querySelector('.jq-comunity-edit');
                     const editVm = editEl && editEl.__vue__;
                     if (!editVm) { reject(new Error('Vue instance not found')); return; }
-
-                    if (!editVm.$axios) {
-                        reject(new Error('No axios available'));
-                        return;
-                    }
-
+                    if (!editVm.$axios) { reject(new Error('No axios available')); return; }
                     editVm.$axios.post('/common/verifyCode/captchar').then(resp => {
                         if (resp.data && resp.data.code === '00000') {
                             resolve(resp.data.data);
                         } else {
-                            const msg = resp.data ? (resp.data.msg || JSON.stringify(resp.data)) : 'no response data';
-                            reject(new Error('CAPTCHA request failed: ' + msg));
+                            reject(new Error('CAPTCHA request failed'));
                         }
-                    }).catch(err => {
-                        const errMsg = err.message || err.toString() || 'unknown error';
-                        reject(new Error('CAPTCHA axios error: ' + errMsg));
-                    });
+                    }).catch(err => reject(new Error(err.message || 'unknown')));
                 });
             }""")
 
@@ -212,7 +275,7 @@ class JoinQuantPostService:
         page.remove_listener("response", on_captcha_response)
 
         if api_response_data:
-            logger.info(f"CAPTCHA API intercepted: bgImgW={api_response_data.get('bgImgW')}, blockW={api_response_data.get('blockW')}, point_count={len(api_response_data.get('point', []))}")
+            logger.info(f"CAPTCHA API intercepted: bgImgW={api_response_data.get('bgImgW')}, blockW={api_response_data.get('blockW')}")
             if not captcha_data:
                 captcha_data = api_response_data
             else:
@@ -226,10 +289,6 @@ class JoinQuantPostService:
             logger.error("No CAPTCHA data received")
             return None
 
-        logger.info(f"CAPTCHA data keys: {list(captcha_data.keys())}")
-        non_img_data = {k: v for k, v in captcha_data.items() if k not in ('bgImg', 'hqImg')}
-        logger.info(f"CAPTCHA non-image fields: {non_img_data}")
-
         bg_img = captcha_data.get("bgImg", "")
         hq_img = captcha_data.get("hqImg", "")
         bg_img_w = captcha_data.get("bgImgW", 320)
@@ -237,16 +296,6 @@ class JoinQuantPostService:
         if not bg_img or not hq_img:
             logger.error("Missing CAPTCHA images")
             return None
-
-        try:
-            import base64 as b64
-            with open("/tmp/jq_captcha_bg.png", "wb") as f:
-                f.write(b64.b64decode(_fix_b64_padding(bg_img)))
-            with open("/tmp/jq_captcha_piece.png", "wb") as f:
-                f.write(b64.b64decode(_fix_b64_padding(hq_img)))
-            logger.info("Saved CAPTCHA images to /tmp/jq_captcha_*.png")
-        except Exception as e:
-            logger.warning(f"Failed to save CAPTCHA images: {e}")
 
         gap_x = shared_find_gap_x(bg_img, hq_img)
         logger.info(f"CAPTCHA raw gap X: {gap_x}, bgImgW: {bg_img_w}")
@@ -259,80 +308,32 @@ class JoinQuantPostService:
                 abs_grid_x = sorted(set(abs(x) for x in grid_x_values))
                 if abs_gap_x := [x for x in abs_grid_x if x > 0]:
                     closest = min(abs_gap_x, key=lambda gx: abs(gx - gap_x))
-                    logger.info(f"Snapped gap X from {gap_x} to grid point {closest} (grid: {abs_grid_x[:10]}...)")
+                    logger.info(f"Snapped gap X from {gap_x} to grid point {closest}")
                     gap_x = closest
 
         scale = 1.0
         display_info = await page.evaluate("""() => {
             const dragContainer = document.querySelector('.valid-code__drag, [class*="drag"]:not([class*="handle"]):not([class*="bg"]):not([class*="text"])');
-            if (dragContainer) {
-                return {type: 'drag', width: dragContainer.clientWidth};
-            }
+            if (dragContainer) return {type: 'drag', width: dragContainer.clientWidth};
             const dialog = document.querySelector('.valid-code-dialog, [class*="validCode"], [class*="captcha"], .el-dialog');
             if (dialog) {
                 const imgs = dialog.querySelectorAll('img');
                 for (const img of imgs) {
-                    if (img.clientWidth > 100) {
-                        return {type: 'img', width: img.clientWidth};
-                    }
-                }
-                const canvas = dialog.querySelector('canvas');
-                if (canvas) {
-                    return {type: 'canvas', width: canvas.clientWidth};
+                    if (img.clientWidth > 100) return {type: 'img', width: img.clientWidth};
                 }
             }
             return null;
         }""")
-        logger.info(f"CAPTCHA display_info: {display_info}")
-        
+
         if display_info and display_info.get('width'):
             display_w = display_info['width']
-            actual_w = bg_img_w
-            if actual_w and actual_w > 0:
-                scale = display_w / actual_w
-                logger.info(f"CAPTCHA scale: {scale:.3f} (display={display_w}, bgImgW={actual_w})")
+            if bg_img_w and bg_img_w > 0:
+                scale = display_w / bg_img_w
+                logger.info(f"CAPTCHA scale: {scale:.3f} (display={display_w}, bgImgW={bg_img_w})")
 
         target_x = int(gap_x * scale)
 
-        await page.screenshot(path="/tmp/jq_captcha_before_slider.png")
-
-        slider_sel = '.valid-code__drag-handle, .handler, [class*="drag-handle"], [class*="slide-handle"]'
-        slider = await page.query_selector(slider_sel)
-        if not slider:
-            slider_info = await page.evaluate("""() => {
-                const dialog = document.querySelector('.valid-code-dialog, [class*="validCode"], [class*="captcha"]');
-                if (!dialog) return {error: 'no_dialog'};
-                
-                const allEls = dialog.querySelectorAll('*');
-                const slideEls = [];
-                for (const el of allEls) {
-                    const cls = el.className || '';
-                    const tag = el.tagName.toLowerCase();
-                    if (cls.includes('slide') || cls.includes('drag') || cls.includes('handler')) {
-                        slideEls.push({
-                            tag: tag,
-                            class: cls,
-                            id: el.id,
-                            rect: el.getBoundingClientRect()
-                        });
-                    }
-                }
-                return {slide_elements: slideEls};
-            }""")
-            logger.info(f"Slider search result: {slider_info}")
-            
-            if slider_info and slider_info.get('slide_elements'):
-                for el_info in slider_info['slide_elements']:
-                    cls = el_info.get('class', '')
-                    if 'handler' in cls or 'drag-handle' in cls or 'handle' in cls:
-                        selector = el_info['tag']
-                        if cls:
-                            selector += '.' + cls.split()[0]
-                        slider = await page.query_selector(selector)
-                        if slider:
-                            logger.info(f"Found slider with selector: {selector}")
-                            break
-
+        slider = await page.query_selector('.valid-code__drag-handle, .handler, [class*="drag-handle"], [class*="slide-handle"]')
         if not slider:
             logger.error("Slider element not found")
             return None
@@ -346,7 +347,7 @@ class JoinQuantPostService:
         start_y = slider_box["y"] + slider_box["height"] / 2
 
         trajectory = shared_generate_trajectory(target_x)
-        logger.info(f"Starting drag from x={start_x:.1f}, target_x={target_x}, trajectory points={len(trajectory)}")
+        logger.info(f"Starting drag from x={start_x:.1f}, target_x={target_x}")
 
         validation_result = {}
         async def on_validation_response(response):
@@ -359,47 +360,26 @@ class JoinQuantPostService:
                 except Exception as e:
                     logger.error(f"Failed to parse validation response: {e}")
 
-        async def on_validation_request(request):
-            if "verifyCode/validate" in request.url and request.method == "POST":
-                try:
-                    post_data = request.post_data
-                    logger.info(f"CAPTCHA validation request: {post_data}")
-                except Exception as e:
-                    logger.error(f"Failed to get validation request data: {e}")
-
         page.on("response", on_validation_response)
-        page.on("request", on_validation_request)
 
-        logger.info(f"Starting mouse drag sequence")
+        import random as rnd
         await page.mouse.move(start_x, start_y)
-        await page.wait_for_timeout(random.randint(100, 300))
-        logger.info(f"Mouse down at ({start_x:.1f}, {start_y:.1f})")
+        await page.wait_for_timeout(rnd.randint(100, 300))
         await page.mouse.down()
-        await page.wait_for_timeout(random.randint(50, 150))
+        await page.wait_for_timeout(rnd.randint(50, 150))
 
-        prev_time = time.time()
         for i, pt in enumerate(trajectory):
-            curr_time = time.time()
-            dt = curr_time - prev_time
-            wait = random.uniform(0.008, 0.025)
+            wait = rnd.uniform(0.008, 0.025)
             await asyncio.sleep(wait)
             curr_x = start_x + pt["x"]
-            curr_y = start_y + random.uniform(-2, 2)
+            curr_y = start_y + rnd.uniform(-2, 2)
             await page.mouse.move(curr_x, curr_y)
-            prev_time = curr_time
-            if i % 10 == 0:
-                logger.info(f"Drag progress: {i}/{len(trajectory)}, x={curr_x:.1f}")
 
-        logger.info(f"Drag complete, mouse up")
-        await page.wait_for_timeout(random.randint(50, 150))
+        await page.wait_for_timeout(rnd.randint(50, 150))
         await page.mouse.up()
-
         await page.wait_for_timeout(3000)
 
         page.remove_listener("response", on_validation_response)
-        page.remove_listener("request", on_validation_request)
-
-        logger.info(f"Validation result: {validation_result}")
 
         token = await page.evaluate("""() => {
             const editEl = document.querySelector('.jq-comunity-edit');
@@ -415,105 +395,72 @@ class JoinQuantPostService:
         logger.warning("CAPTCHA solve attempt failed, no token received")
         return None
 
-    async def _solve_captcha_manual(self, page, captcha_data: dict, user_id: int) -> str | None:
-        """Wait for manual CAPTCHA solving from frontend."""
-        bg_img = captcha_data.get("bgImg", "")
-        hq_img = captcha_data.get("hqImg", "")
-        bg_img_w = captcha_data.get("bgImgW", 363)
-
-        set_captcha_state(user_id, {
-            "status": "waiting",
-            "bgImg": bg_img,
-            "hqImg": hq_img,
-            "bgImgW": bg_img_w,
-            "axisX": None,
-        })
-        logger.info(f"Waiting for manual CAPTCHA input from user {user_id}")
-
-        for _ in range(120):
-            await asyncio.sleep(1)
-            state = get_captcha_state(user_id)
-            if state.get("status") == "solved":
-                break
-        else:
-            logger.error("Manual CAPTCHA timeout (120s)")
-            set_captcha_state(user_id, {"status": "timeout"})
-            return None
-
-        state = get_captcha_state(user_id)
-        manual_x = state.get("axisX")
-        if manual_x is None:
-            logger.error("No axisX received from manual input")
-            return None
-
-        logger.info(f"Manual CAPTCHA axisX: {manual_x}")
-
-        slider_sel = '.valid-code__drag-handle, .handler'
-        slider = await page.query_selector(slider_sel)
-        if not slider:
-            logger.error("Slider not found for manual solve")
-            return None
-
-        slider_box = await slider.bounding_box()
-        if not slider_box:
-            logger.error("Slider bounding box not available")
-            return None
-
-        start_x = slider_box["x"] + slider_box["width"] / 2
-        start_y = slider_box["y"] + slider_box["height"] / 2
-        target_x = int(manual_x)
-
-        validation_result = {}
-        async def on_validation_response(response):
-            if "verifyCode/validate" in response.url and response.request.method == "POST":
-                try:
-                    body = await response.json()
-                    validation_result["body"] = body
-                    logger.info(f"Manual CAPTCHA validation: {body}")
-                except Exception:
-                    pass
-
-        page.on("response", on_validation_response)
-
-        trajectory = shared_generate_trajectory(target_x)
-        await page.mouse.move(start_x, start_y)
-        await page.wait_for_timeout(random.randint(100, 300))
-        await page.mouse.down()
-        await page.wait_for_timeout(random.randint(50, 150))
-
-        for pt in trajectory:
-            await asyncio.sleep(random.uniform(0.01, 0.025))
-            curr_x = start_x + pt["x"]
-            curr_y = start_y + random.uniform(-1, 1)
-            await page.mouse.move(curr_x, curr_y)
-
-        await page.wait_for_timeout(random.randint(50, 100))
-        await page.mouse.up()
-        await page.wait_for_timeout(3000)
-
-        page.remove_listener("response", on_validation_response)
-
-        token = await page.evaluate("""() => {
+    async def _resubmit_with_token(self, page, token: str) -> str:
+        """Set token in Vue and resubmit the post. Returns result description."""
+        resubmit = await page.evaluate("""(token) => {
             const editEl = document.querySelector('.jq-comunity-edit');
             const editVm = editEl && editEl.__vue__;
-            if (!editVm) return null;
-            return editVm.validCodetoken || editVm.submitCode || null;
-        }""")
+            if (!editVm) return 'no vue';
+            editVm.$data.validCodetoken = token;
+            editVm.$data.submitCode = token;
+            if (editVm.submitCodePostInfo) {
+                editVm.submitCodePostInfo.submitCode = token;
+            }
+            try {
+                editVm.submitCodeDialog();
+                return 'submitted';
+            } catch(e) {
+                try {
+                    editVm.releaseEdit();
+                    return 'releaseEdit recalled';
+                } catch(e2) {
+                    return 'error: ' + e2.message;
+                }
+            }
+        }""", token)
+        logger.info(f"Resubmit result: {resubmit}")
+        return resubmit
 
-        if token:
-            logger.info(f"Manual CAPTCHA solved, token: {token[:20]}...")
-            return token
+    async def _parse_submit_result(self, submit_result: dict) -> dict:
+        """Parse the post submit API response into a result dict."""
+        if submit_result.get("status") == 200:
+            try:
+                body = json.loads(submit_result.get("body", "{}"))
+                if body.get("status") == "0" or body.get("code") == "00000":
+                    post_id = body.get("data", {}).get("postId") or body.get("data", {}).get("id", "")
+                    return {"success": True, "message": "发帖成功", "post_id": str(post_id)}
+                else:
+                    msg = body.get("msg", "") or body.get("message", "")
+                    if "验证" in msg or "验证码" in msg:
+                        return {"success": False, "error": "验证码未通过"}
+                    return {"success": False, "error": msg or f"发帖失败: {body}"}
+            except Exception:
+                return {"success": True, "message": "发帖请求已提交"}
+        elif submit_result:
+            return {"success": False, "error": f"API status: {submit_result.get('status')}"}
+        else:
+            return {"success": False, "error": "未检测到发帖提交请求"}
 
-        logger.warning("Manual CAPTCHA failed, no token")
-        return None
-
-    async def create_post(
+    async def start_post(
         self,
         user_id: int,
         content: str,
         title: str = None,
         platform: str = "joinquant",
+        image_path: str = None,
+        image_url: str = None,
     ) -> dict:
+        """Phase 1: Fill form, submit, auto-solve CAPTCHA up to 3 times.
+
+        Returns success result or {status: "captcha_required", captcha_data: {...}}.
+        """
+        _cleanup_expired_sessions()
+
+        existing = _sessions.get(user_id)
+        if existing:
+            await _cleanup_post_session(existing)
+            _sessions.pop(user_id, None)
+
         storage_state_path = self.account_manager.get_storage_state_path(user_id, platform)
         if not storage_state_path:
             return {"success": False, "error": "未登录，请先登录聚宽"}
@@ -524,7 +471,6 @@ class JoinQuantPostService:
             pw, browser, context, page = await self._setup_browser(storage_state_path)
 
             submit_result = {}
-
             async def on_response(response):
                 url = response.url
                 if "community/post/submit" in url and response.request.method == "POST":
@@ -542,8 +488,6 @@ class JoinQuantPostService:
             await page.goto(JQ_EDIT_URL, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(5000)
 
-            await page.screenshot(path="/tmp/jq_post_editor.png")
-
             is_logged_in = await page.evaluate("""() => {
                 const loginBtn = document.querySelector('.jq-header-login') ||
                                  document.querySelector('a[href*="login"]');
@@ -551,7 +495,7 @@ class JoinQuantPostService:
             }""")
 
             if not is_logged_in:
-                await self._cleanup(pw, browser)
+                await _cleanup_post_session(PostSession(user_id=user_id, platform=platform, pw_instance=pw, browser=browser))
                 return {"success": False, "error": "登录已过期，请重新登录聚宽"}
 
             if not title:
@@ -560,15 +504,11 @@ class JoinQuantPostService:
                 title = first_line[:50] if first_line else f"股票分析 {time.strftime('%Y-%m-%d')}"
                 if len(lines) > 1:
                     content = "\n".join(lines[1:]).strip()
-                else:
-                    content = content
 
             title_filled = await page.evaluate("""(title) => {
                 const editEl = document.querySelector('.jq-comunity-edit');
                 const editVm = editEl && editEl.__vue__;
                 if (!editVm) return 'no vue';
-                if (!editVm.$data || !('articleTitle' in editVm.$data)) return 'no vue';
-
                 const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
                     window.HTMLInputElement.prototype, 'value'
                 ).set;
@@ -589,11 +529,20 @@ class JoinQuantPostService:
                 const editEl = document.querySelector('.jq-comunity-edit');
                 const editVm = editEl && editEl.__vue__;
                 if (!editVm) return 'no vue';
-                if (!editVm.$data || !('markDwonContent' in editVm.$data)) return 'no vue';
-
-                const textarea = document.querySelector('textarea') ||
-                                 document.querySelector('.edit-content textarea') ||
-                                 document.querySelector('[class*="markdown"] textarea');
+                const mk = editVm.$refs.MarkKookComponent;
+                if (mk && mk.$el) {
+                    const ta = mk.$el.querySelector('textarea');
+                    if (ta) {
+                        const ns = Object.getOwnPropertyDescriptor(
+                            window.HTMLTextAreaElement.prototype, 'value'
+                        ).set;
+                        ns.call(ta, content);
+                        ta.dispatchEvent(new Event('input', { bubbles: true }));
+                        ta.dispatchEvent(new Event('change', { bubbles: true }));
+                        return 'ok_via_markkook';
+                    }
+                }
+                const textarea = document.querySelector('textarea');
                 if (textarea) {
                     const nativeSetter = Object.getOwnPropertyDescriptor(
                         window.HTMLTextAreaElement.prototype, 'value'
@@ -602,54 +551,44 @@ class JoinQuantPostService:
                     textarea.dispatchEvent(new Event('input', { bubbles: true }));
                     textarea.dispatchEvent(new Event('change', { bubbles: true }));
                 }
-                editVm.$data.markDwonContent = content;
-                return 'ok';
+                editVm.$data.markDwenContent = content;
+                return 'ok_via_fallback';
             }""", content)
             logger.info(f"Content fill result: {content_filled}")
 
             await page.wait_for_timeout(1000)
 
+            if image_path or image_url:
+                upload_result = await self._upload_image(page, image_path, image_url)
+                logger.info(f"Image upload result: {upload_result}")
+
             tag_selected = await page.evaluate("""() => {
                 const editEl = document.querySelector('.jq-comunity-edit');
                 const editVm = editEl && editEl.__vue__;
                 if (!editVm) return 'no vue';
-
                 if (editVm.$data.userChosedTags && editVm.$data.userChosedTags.length > 0) {
                     return 'already_set:' + JSON.stringify(editVm.$data.userChosedTags);
                 }
-
-                const tagSpans = document.querySelectorAll('.jq-comunity-edit span');
-                const targetTags = ['心得', '讨论', '分享'];
-                for (const span of tagSpans) {
-                    const text = span.textContent.trim();
-                    if (targetTags.indexOf(text) >= 0) {
-                        span.click();
-                        return 'clicked:' + text;
+                const allTags = editVm.$data.allUserTags || [];
+                const preferred = ['讨论', '分享', '心得', '研报分享'];
+                let chosen = null;
+                for (const pref of preferred) {
+                    for (const t of allTags) {
+                        if (t.name === pref) { chosen = t; break; }
                     }
+                    if (chosen) break;
                 }
-
-                const allSpans = document.querySelectorAll('span');
-                for (const span of allSpans) {
-                    const text = span.textContent.trim();
-                    if (text === '心得' || text === '讨论') {
-                        span.click();
-                        return 'clicked_global:' + text;
-                    }
+                if (!chosen && allTags.length > 0) chosen = allTags[0];
+                if (chosen) {
+                    chosen.active = true;
+                    editVm.$data.userChosedTags = [chosen];
+                    return 'set_via_vue:' + chosen.name + '(tagId=' + chosen.tagId + ')';
                 }
-                
-                const sampleSpans = [];
-                for (let i = 0; i < Math.min(20, allSpans.length); i++) {
-                    const text = allSpans[i].textContent.trim();
-                    if (text && text.length < 20) {
-                        sampleSpans.push(text);
-                    }
-                }
-                return 'no_tags_found, sample: ' + JSON.stringify(sampleSpans);
+                return 'no_tags_available, allUserTags count=' + allTags.length;
             }""")
             logger.info(f"Tag selection: {tag_selected}")
 
             await page.wait_for_timeout(500)
-            await page.screenshot(path="/tmp/jq_post_before_submit.png")
 
             submit_result.clear()
 
@@ -672,28 +611,11 @@ class JoinQuantPostService:
                     const editEl = document.querySelector('.jq-comunity-edit');
                     const editVm = editEl && editEl.__vue__;
                     if (!editVm) { resolve({error: 'no vue'}); return; }
-
-                    if (typeof editVm.getNeedSubmitCode === 'function') {
-                        try {
-                            editVm.getNeedSubmitCode(function(needCode) {
-                                if (needCode === 0) {
-                                    editVm.postArticle();
-                                    resolve({status: 'posted_directly', needCode: needCode});
-                                } else {
-                                    if (editVm.$refs && editVm.$refs.validCodeDiloag && editVm.$refs.validCodeDiloag.getCaptchar) {
-                                        editVm.$refs.validCodeDiloag.getCaptchar();
-                                    }
-                                    editVm.$data.validCodeDialogVisible = true;
-                                    resolve({status: 'captcha_needed', needCode: needCode});
-                                }
-                            });
-                        } catch(e) {
-                            editVm.postArticle();
-                            resolve({status: 'posted_fallback', error: e.message});
-                        }
-                    } else {
-                        editVm.postArticle();
-                        resolve({status: 'posted_no_check'});
+                    try {
+                        editVm.releaseEdit();
+                        resolve({status: 'releaseEdit_called'});
+                    } catch(e) {
+                        resolve({status: 'releaseEdit_error', error: e.message});
                     }
                 });
             }""")
@@ -701,150 +623,85 @@ class JoinQuantPostService:
 
             await page.wait_for_timeout(3000)
 
-            captcha_needed = post_result.get("status") == "captcha_needed"
+            captcha_needed = await page.evaluate("""() => {
+                const editEl = document.querySelector('.jq-comunity-edit');
+                const editVm = editEl && editEl.__vue__;
+                if (!editVm) return false;
+                return !!(editVm.$data && editVm.$data.validCodeDialogVisible);
+            }""")
+
             if not captcha_needed:
-                captcha_needed = await page.evaluate("""() => {
-                    const editEl = document.querySelector('.jq-comunity-edit');
-                    const editVm = editEl && editEl.__vue__;
-                    if (!editVm) return false;
-                    return !!(editVm.$data && editVm.$data.validCodeDialogVisible);
-                }""")
+                page.remove_listener("response", on_first_captcha_response)
+                await self._save_cookies(user_id, platform, context)
+                await _cleanup_post_session(PostSession(user_id=user_id, platform=platform, pw_instance=pw, browser=browser))
+                return await self._parse_submit_result(submit_result)
 
-            if captcha_needed:
-                logger.info("CAPTCHA dialog detected, attempting to solve...")
-                await page.wait_for_timeout(2000)
+            logger.info("CAPTCHA dialog detected, attempting auto-solve...")
+            await page.wait_for_timeout(2000)
 
-                if first_captcha_data:
-                    logger.info(f"Using pre-captured CAPTCHA data: bgImgW={first_captcha_data.get('bgImgW')}, blockW={first_captcha_data.get('blockW')}, points={len(first_captcha_data.get('point', []))}")
+            token = None
+            for attempt in range(3):
+                logger.info(f"CAPTCHA solve attempt {attempt + 1}/3")
+                token = await self._solve_captcha_auto(
+                    page,
+                    pre_captured_data=first_captcha_data if attempt == 0 else None,
+                )
 
-                captcha_api_data = {}
-                async def on_captcha_api_response(response):
-                    if "verifyCode/captchar" in response.url and response.request.method == "POST":
-                        try:
-                            body = await response.json()
-                            if body.get("code") == "00000":
-                                data = body.get("data", {})
-                                captcha_api_data["data"] = data
-                                non_img = {k: v for k, v in data.items() if k not in ('bgImg', 'hqImg')}
-                                logger.info(f"CAPTCHA API raw response fields: {non_img}")
-                                logger.info(f"CAPTCHA API all keys: {list(data.keys())}")
-                        except Exception as e:
-                            logger.error(f"Failed to parse CAPTCHA API response: {e}")
+                if token:
+                    logger.info(f"Got CAPTCHA token: {token[:20]}...")
+                    await self._resubmit_with_token(page, token)
+                    await page.wait_for_timeout(5000)
 
-                page.on("response", on_captcha_api_response)
-
-                for attempt in range(3):
-                    logger.info(f"CAPTCHA solve attempt {attempt + 1}/3")
-
-                    token = await self._solve_captcha(page, pre_captured_data=first_captcha_data if attempt == 0 else None, user_id=user_id)
-
-                    if token:
-                        logger.info(f"Got CAPTCHA token: {token[:20]}...")
-
-                        resubmit = await page.evaluate("""(token) => {
+                    if submit_result.get("status") == 200:
+                        break
+                else:
+                    logger.warning(f"CAPTCHA attempt {attempt + 1} failed")
+                    if attempt < 2:
+                        refresh = await page.evaluate("""() => {
                             const editEl = document.querySelector('.jq-comunity-edit');
                             const editVm = editEl && editEl.__vue__;
                             if (!editVm) return 'no vue';
-                            editVm.$data.validCodetoken = token;
-                            editVm.$data.submitCode = token;
-                            if (editVm.submitCodePostInfo) {
-                                editVm.submitCodePostInfo.submitCode = token;
+                            const captchaVm = editVm.$refs && editVm.$refs.validCodeDiloag;
+                            if (captchaVm && captchaVm.getCaptchar) {
+                                captchaVm.getCaptchar();
+                                return 'refreshed';
                             }
-                            try {
-                                editVm.submitCodeDialog();
-                                return 'submitted';
-                            } catch(e) {
-                                try {
-                                    editVm.postArticle();
-                                    return 'postArticle recalled';
-                                } catch(e2) {
-                                    return 'error: ' + e2.message;
-                                }
-                            }
-                        }""", token)
-                        logger.info(f"Resubmit result: {resubmit}")
+                            return 'no captcha ref';
+                        }""")
+                        logger.info(f"CAPTCHA refresh: {refresh}")
+                        await page.wait_for_timeout(2000)
 
-                        await page.wait_for_timeout(5000)
+            page.remove_listener("response", on_first_captcha_response)
 
-                        if submit_result.get("status") == 200:
-                            break
-                    else:
-                        logger.warning(f"CAPTCHA attempt {attempt + 1} failed")
-                        if attempt < 2:
-                            refresh = await page.evaluate("""() => {
-                                const editEl = document.querySelector('.jq-comunity-edit');
-                                const editVm = editEl && editEl.__vue__;
-                                if (!editVm) return 'no vue';
-                                const captchaVm = editVm.$refs && editVm.$refs.validCodeDiloag;
-                                if (captchaVm && captchaVm.getCaptchar) {
-                                    captchaVm.getCaptchar();
-                                    return 'refreshed';
-                                }
-                                return 'no captcha ref';
-                            }""")
-                            logger.info(f"CAPTCHA refresh: {refresh}")
-                            await page.wait_for_timeout(2000)
-                page.remove_listener("response", on_captcha_api_response)
+            if token and submit_result.get("status") == 200:
+                await self._save_cookies(user_id, platform, context)
+                await _cleanup_post_session(PostSession(user_id=user_id, platform=platform, pw_instance=pw, browser=browser))
+                return await self._parse_submit_result(submit_result)
 
-                if not token:
-                    logger.info("Automatic CAPTCHA failed, switching to manual mode...")
-                    manual_data = first_captcha_data or captcha_api_data.get("data", {})
-                    if manual_data:
-                        token = await self._solve_captcha_manual(page, manual_data, user_id)
-                        if token:
-                            resubmit = await page.evaluate("""(token) => {
-                                const editEl = document.querySelector('.jq-comunity-edit');
-                                const editVm = editEl && editEl.__vue__;
-                                if (!editVm) return 'no vue';
-                                editVm.$data.validCodetoken = token;
-                                editVm.$data.submitCode = token;
-                                if (editVm.submitCodePostInfo) {
-                                    editVm.submitCodePostInfo.submitCode = token;
-                                }
-                                try {
-                                    editVm.submitCodeDialog();
-                                    return 'submitted';
-                                } catch(e) {
-                                    try {
-                                        editVm.postArticle();
-                                        return 'postArticle recalled';
-                                    } catch(e2) {
-                                        return 'error: ' + e2.message;
-                                    }
-                                }
-                            }""", token)
-                            logger.info(f"Manual resubmit result: {resubmit}")
-                            await page.wait_for_timeout(5000)
-            else:
-                logger.info("No CAPTCHA dialog, checking if post was submitted directly")
-                await page.wait_for_timeout(3000)
+            logger.info("Automatic CAPTCHA failed, switching to manual mode")
+            captcha_data = await JoinQuantCaptchaService.extract_post_captcha_data(page, first_captcha_data)
 
-            await page.screenshot(path="/tmp/jq_post_after_submit.png")
+            session = PostSession(
+                user_id=user_id,
+                platform=platform,
+                pw_instance=pw,
+                browser=browser,
+                context=context,
+                page=page,
+                captcha_data=captcha_data,
+            )
+            _sessions[user_id] = session
 
-            await self._save_cookies(user_id, platform, context)
-            await self._cleanup(pw, browser)
-
-            if submit_result.get("status") == 200:
-                try:
-                    body = json.loads(submit_result.get("body", "{}"))
-                    if body.get("status") == "0" or body.get("code") == "00000":
-                        post_id = body.get("data", {}).get("postId") or body.get("data", {}).get("id", "")
-                        return {"success": True, "message": "发帖成功", "post_id": str(post_id)}
-                    else:
-                        msg = body.get("msg", "") or body.get("message", "")
-                        if "验证" in msg or "验证码" in msg:
-                            return {"success": False, "error": "验证码未通过"}
-                        return {"success": False, "error": msg or f"发帖失败: {body}"}
-                except Exception:
-                    return {"success": True, "message": "发帖请求已提交"}
-            elif submit_result:
-                return {"success": False, "error": f"API status: {submit_result.get('status')}"}
-            else:
-                return {"success": False, "error": "未检测到发帖提交请求"}
+            return {
+                "success": False,
+                "status": "captcha_required",
+                "captcha_data": captcha_data,
+            }
 
         except Exception as e:
             logger.error(f"JoinQuant post failed: {e}", exc_info=True)
-            await self._cleanup(pw, browser)
+            if pw or browser:
+                await _cleanup_post_session(PostSession(user_id=user_id, platform=platform, pw_instance=pw, browser=browser))
             return {"success": False, "error": str(e)}
         finally:
             if storage_state_path:
@@ -853,3 +710,96 @@ class JoinQuantPostService:
                     Path(storage_state_path).parent.rmdir()
                 except Exception:
                     pass
+
+    async def validate_captcha(self, user_id: int, axis_x: int) -> dict:
+        """Phase 2: Manual CAPTCHA validation for post.
+
+        Uses shared service to drag slider, then resubmits post on success.
+        On failure, refreshes CAPTCHA and returns new data for retry.
+        """
+        session = _sessions.get(user_id)
+        if not session or not session.page:
+            return {"success": False, "error": "没有待验证的发帖会话"}
+
+        page = session.page
+        context = session.context
+        captcha_data = session.captcha_data or {}
+        expected_width = captcha_data.get("bgImgW", 320)
+
+        try:
+            drag_result = await JoinQuantCaptchaService.simulate_drag(page, axis_x, expected_width)
+
+            if drag_result["success"]:
+                token = await page.evaluate("""() => {
+                    const editEl = document.querySelector('.jq-comunity-edit');
+                    const editVm = editEl && editEl.__vue__;
+                    if (!editVm) return null;
+                    return editVm.validCodetoken || editVm.submitCode || null;
+                }""")
+
+                if not token:
+                    _sessions.pop(user_id, None)
+                    await _cleanup_post_session(session)
+                    return {"success": False, "error": "验证码通过但未获取到token"}
+
+                submit_result = {}
+                async def on_response(response):
+                    if "community/post/submit" in response.url and response.request.method == "POST":
+                        try:
+                            body = await response.text()
+                            submit_result["status"] = response.status
+                            submit_result["body"] = body
+                            logger.info(f"Post submit API (manual): {response.status} -> {body[:200]}")
+                        except Exception:
+                            pass
+
+                page.on("response", on_response)
+                await self._resubmit_with_token(page, token)
+                await page.wait_for_timeout(5000)
+                page.remove_listener("response", on_response)
+
+                await self._save_cookies(user_id, session.platform, context)
+                _sessions.pop(user_id, None)
+                await _cleanup_post_session(session)
+
+                return await self._parse_submit_result(submit_result)
+            else:
+                body = drag_result.get("body", {})
+                data = body.get("data", {})
+                message = data.get("message", "验证码验证错误")
+                logger.warning(f"Manual CAPTCHA failed: {message}")
+
+                async def refresh_fn():
+                    await page.evaluate("""() => {
+                        const editEl = document.querySelector('.jq-comunity-edit');
+                        const editVm = editEl && editEl.__vue__;
+                        if (!editVm) return;
+                        const captchaVm = editVm.$refs && editVm.$refs.validCodeDiloag;
+                        if (captchaVm && captchaVm.getCaptchar) {
+                            captchaVm.getCaptchar();
+                        }
+                    }""")
+
+                new_captcha = await JoinQuantCaptchaService.refresh(page, refresh_fn, {
+                    "bgImgW": captcha_data.get("bgImgW", 320),
+                    "bgImgH": captcha_data.get("bgImgH", 142),
+                    "blockW": captcha_data.get("blockW", 11),
+                    "blockH": captcha_data.get("blockH", 71),
+                })
+
+                if new_captcha:
+                    session.captcha_data = new_captcha
+                    return {
+                        "success": False,
+                        "status": "captcha_required",
+                        "message": message,
+                        "captcha_data": new_captcha,
+                    }
+
+                return {"success": False, "error": f"验证码错误: {message}"}
+
+        except Exception as e:
+            logger.error(f"Post CAPTCHA validation failed: {e}", exc_info=True)
+            _sessions.pop(user_id, None)
+            await _cleanup_post_session(session)
+            return {"success": False, "error": str(e)}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { platformApi, stockSelectionApi, posterApi, type PlatformAccount, type Strategy, type StockSelectionRecord } from '../api/client';
 import KlineChart from './KlineChart';
+import SlidingCaptcha from '../components/SlidingCaptcha';
 
 interface PlatformInfo {
   id: string;
@@ -22,6 +23,14 @@ interface PostResult {
   platform: string;
   success: boolean;
   message: string;
+}
+
+interface PostCaptchaData {
+  bgImg: string;
+  hqImg: string;
+  bgImgW: number;
+  bgImgH?: number;
+  axisY?: number;
 }
 
 export default function PostManagement({ token }: Props) {
@@ -47,11 +56,9 @@ export default function PostManagement({ token }: Props) {
   const [llmOptimizing, setLlmOptimizing] = useState(false);
   const [trendDirection, setTrendDirection] = useState<'auto' | 'bullish' | 'bearish'>('auto');
   const [jqPostUrl, setJqPostUrl] = useState('');
-  const [captchaData, setCaptchaData] = useState<{bgImg: string; hqImg: string; bgImgW: number} | null>(null);
-  const [captchaDragging, setCaptchaDragging] = useState(false);
-  const [captchaX, setCaptchaX] = useState(0);
-  const [captchaStartX, setCaptchaStartX] = useState(0);
-  const [captchaStatus, setCaptchaStatus] = useState('');
+  const [postCaptchaData, setPostCaptchaData] = useState<PostCaptchaData | null>(null);
+  const [postCaptchaLoading, setPostCaptchaLoading] = useState(false);
+  const [postCaptchaMsg, setPostCaptchaMsg] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -65,57 +72,6 @@ export default function PostManagement({ token }: Props) {
   }, [token]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setInterval>;
-    if (sending) {
-      timer = setInterval(async () => {
-        try {
-          const resp = await fetch('/api/platform/joinquant/captcha-status', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          const data = await resp.json();
-          const status = data.status;
-          if (status && status.status === 'waiting' && status.bgImg) {
-            setCaptchaData({ bgImg: status.bgImg, hqImg: status.hqImg, bgImgW: status.bgImgW });
-            setCaptchaStatus('waiting');
-          } else if (status && status.status !== 'waiting' && captchaData) {
-            setCaptchaData(null);
-            setCaptchaStatus('');
-            setCaptchaX(0);
-          }
-        } catch { /* ignore */ }
-      }, 1000);
-    }
-    return () => { if (timer) clearInterval(timer); };
-  }, [sending, token]);
-
-  const handleCaptchaMouseDown = (e: React.MouseEvent) => {
-    setCaptchaDragging(true);
-    setCaptchaStartX(e.clientX - captchaX);
-  };
-
-  const handleCaptchaMouseMove = (e: React.MouseEvent) => {
-    if (!captchaDragging || !captchaData) return;
-    const newX = Math.max(0, Math.min(e.clientX - captchaStartX, captchaData.bgImgW - 42));
-    setCaptchaX(newX);
-  };
-
-  const handleCaptchaMouseUp = async () => {
-    if (!captchaDragging) return;
-    setCaptchaDragging(false);
-    setCaptchaStatus('submitting');
-    try {
-      await fetch('/api/platform/joinquant/captcha-solve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ axisX: captchaX }),
-      });
-      setCaptchaStatus('submitted');
-    } catch {
-      setCaptchaStatus('error');
-    }
-  };
 
   const validAccounts = accounts.filter(a => a.is_valid);
 
@@ -182,7 +138,6 @@ export default function PostManagement({ token }: Props) {
       setPostContent(content);
       setGeneratedStock(name);
 
-      // Fallback poster generation if LLM optimization didn't provide one
       if (!posterUrl) {
         const today = new Date().toISOString().split('T')[0];
         const titleMatch = resp.summary.match(/^##\s+(.+)$/m);
@@ -231,7 +186,6 @@ export default function PostManagement({ token }: Props) {
       setPostContent(content);
       setGeneratedStock(record.name);
 
-      // Fallback poster generation if LLM optimization didn't provide one
       if (!posterUrl) {
         const today = new Date().toISOString().split('T')[0];
         const titleMatch = resp.summary.match(/^##\s+(.+)$/m);
@@ -257,6 +211,8 @@ export default function PostManagement({ token }: Props) {
     if (!postContent.trim() || selectedPlatforms.size === 0) return;
     setSending(true);
     setPostResults([]);
+    setPostCaptchaData(null);
+    setPostCaptchaMsg('');
     const results: PostResult[] = [];
     for (const pid of selectedPlatforms) {
       const info = PLATFORMS.find(p => p.id === pid);
@@ -270,11 +226,21 @@ export default function PostManagement({ token }: Props) {
           });
         } else {
           const resp = await platformApi.createPost(pid, postContent, token, posterUrl || undefined, posterLocalPath || undefined);
-          results.push({
-            platform: info?.name || pid,
-            success: resp.success,
-            message: resp.success ? (resp.message || 'Success') : (resp.error || 'Failed'),
-          });
+          if (resp.status === 'captcha_required' && resp.captcha_data) {
+            setPostCaptchaData(resp.captcha_data);
+            setPostCaptchaMsg('请拖动滑块完成验证');
+            results.push({
+              platform: info?.name || pid,
+              success: false,
+              message: '等待验证码...',
+            });
+          } else {
+            results.push({
+              platform: info?.name || pid,
+              success: resp.success,
+              message: resp.success ? (resp.message || 'Success') : (resp.error || 'Failed'),
+            });
+          }
         }
       } catch (err: unknown) {
         results.push({
@@ -285,83 +251,81 @@ export default function PostManagement({ token }: Props) {
       }
     }
     setPostResults(results);
-    setSending(false);
-    if (results.every(r => r.success)) {
-      setPostContent('');
-      setGeneratedStock('');
+    if (!postCaptchaData) {
+      setSending(false);
+      if (results.every(r => r.success)) {
+        setPostContent('');
+        setGeneratedStock('');
+      }
+    }
+  }
+
+  async function handlePostCaptchaSubmit(axisX: number) {
+    setPostCaptchaLoading(true);
+    setPostCaptchaMsg('正在验证...');
+    try {
+      const resp = await platformApi.validateCaptcha(token, axisX, 'post');
+      if (resp.success) {
+        setPostCaptchaData(null);
+        setPostCaptchaMsg('');
+        setPostResults(prev => {
+          const updated = [...prev];
+          const jqIdx = updated.findIndex(r => r.platform === '聚宽');
+          if (jqIdx >= 0) {
+            updated[jqIdx] = {
+              platform: '聚宽',
+              success: true,
+              message: resp.message || '发帖成功',
+            };
+          }
+          return updated;
+        });
+        setSending(false);
+        setPostContent('');
+        setGeneratedStock('');
+      } else if (resp.status === 'captcha_required' && resp.captcha_data) {
+        setPostCaptchaData(resp.captcha_data);
+        setPostCaptchaMsg(resp.message || '验证失败，请重试');
+      } else {
+        setPostCaptchaData(null);
+        setPostCaptchaMsg('');
+        setPostResults(prev => {
+          const updated = [...prev];
+          const jqIdx = updated.findIndex(r => r.platform === '聚宽');
+          if (jqIdx >= 0) {
+            updated[jqIdx] = {
+              platform: '聚宽',
+              success: false,
+              message: resp.error || '验证失败',
+            };
+          }
+          return updated;
+        });
+        setSending(false);
+      }
+    } catch (err: unknown) {
+      setPostCaptchaMsg(err instanceof Error ? err.message : String(err));
+      setSending(false);
+    } finally {
+      setPostCaptchaLoading(false);
     }
   }
 
   return (
     <div className="post-mgmt">
-      {captchaData && captchaStatus === 'waiting' && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.7)', zIndex: 9999,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <div style={{
-            background: '#fff', borderRadius: 12, padding: 24, minWidth: 400,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-          }}>
-            <h3 style={{ margin: '0 0 16px', textAlign: 'center' }}>请拖动滑块完成验证</h3>
-            <div style={{ position: 'relative', marginBottom: 16 }}>
-              <img
-                src={`data:image/png;base64,${captchaData.bgImg}`}
-                style={{ width: captchaData.bgImgW, height: 142, display: 'block', borderRadius: 4 }}
-                alt="captcha background"
-              />
-              <img
-                src={`data:image/png;base64,${captchaData.hqImg}`}
-                style={{
-                  position: 'absolute', top: 0, left: captchaX,
-                  height: 142, pointerEvents: 'none',
-                }}
-                alt="captcha piece"
-              />
-            </div>
-            <div
-              onMouseDown={handleCaptchaMouseDown}
-              onMouseMove={handleCaptchaMouseMove}
-              onMouseUp={handleCaptchaMouseUp}
-              onMouseLeave={() => captchaDragging && handleCaptchaMouseUp()}
-              style={{
-                position: 'relative', height: 40, background: '#e8e8e8',
-                borderRadius: 20, cursor: 'grab', userSelect: 'none',
-              }}
-            >
-              <div style={{
-                position: 'absolute', top: 0, left: 0, height: '100%',
-                width: captchaX + 42, background: '#4CAF50',
-                borderRadius: 20, opacity: 0.3,
-              }} />
-              <div style={{
-                position: 'absolute', top: 0, left: captchaX,
-                width: 42, height: 42, background: '#4CAF50',
-                borderRadius: '50%', cursor: 'grab',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#fff', fontSize: 18, fontWeight: 'bold',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-              }}>
-                →
-              </div>
-            </div>
-            <p style={{ textAlign: 'center', color: '#666', marginTop: 12, fontSize: 13 }}>
-              按住滑块向右拖动到缺口位置
-            </p>
-          </div>
-        </div>
-      )}
-      {captchaData && captchaStatus === 'submitting' && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.5)', zIndex: 9999,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <div style={{ background: '#fff', borderRadius: 12, padding: 24 }}>
-            <p>正在提交验证...</p>
-          </div>
-        </div>
+      {postCaptchaData && (
+        <SlidingCaptcha
+          bgImg={postCaptchaData.bgImg}
+          hqImg={postCaptchaData.hqImg}
+          bgImgW={postCaptchaData.bgImgW}
+          bgImgH={postCaptchaData.bgImgH}
+          axisY={postCaptchaData.axisY}
+          onSubmit={handlePostCaptchaSubmit}
+          onCancel={() => { setPostCaptchaData(null); setPostCaptchaMsg(''); setSending(false); }}
+          loading={postCaptchaLoading}
+          message={postCaptchaMsg || undefined}
+          variant="modal"
+        />
       )}
       <div className="step-bar">
         <div className={`step-item ${step >= 1 ? 'active' : ''}`} onClick={() => setStep(1)}>

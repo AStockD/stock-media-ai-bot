@@ -14,7 +14,7 @@ from app.services.xueqiu_post_service import XueqiuPostService
 from app.services.xueqiu_comment_service import XueqiuCommentService
 from app.services.joinquant_login_service import get_joinquant_login_service
 from app.services.joinquant_comment_service import JoinQuantCommentService
-from app.services.joinquant_post_service import JoinQuantPostService, set_captcha_state, get_captcha_state
+from app.services.joinquant_post_service import JoinQuantPostService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/platform", tags=["platform"])
@@ -24,33 +24,22 @@ comment_service = XueqiuCommentService(account_manager)
 jq_comment_service = JoinQuantCommentService(account_manager)
 jq_post_service = JoinQuantPostService(account_manager)
 
-@router.get("/joinquant/captcha-status")
-async def get_captcha_status(user: dict = Depends(get_current_user)):
-    status = get_captcha_state(user["id"])
-    return {"status": status}
-
-@router.post("/joinquant/captcha-solve")
-async def submit_captcha_solution(data: dict, user: dict = Depends(get_current_user)):
+@router.post("/joinquant/captcha/validate")
+async def captcha_validate(data: dict, user: dict = Depends(get_current_user)):
     axis_x = data.get("axisX")
+    session_type = data.get("sessionType", "login")
     if axis_x is None:
         raise HTTPException(400, "axisX required")
-    
-    state = get_captcha_state(user["id"])
-    if not state or state.get("status") != "waiting":
-        raise HTTPException(400, "No CAPTCHA waiting")
-    
-    state["axisX"] = axis_x
-    state["status"] = "solved"
-    return {"status": "ok"}
 
-@router.post("/joinquant/login/captcha-validate")
-async def login_captcha_validate(data: dict, user: dict = Depends(get_current_user)):
-    axis_x = data.get("axisX")
-    if axis_x is None:
-        raise HTTPException(400, "axisX required")
-    
-    jq_login_svc = get_joinquant_login_service(account_manager)
-    return await jq_login_svc.validate_captcha(user["id"], "joinquant", int(axis_x))
+    if session_type == "post":
+        return await jq_post_service.validate_captcha(user["id"], int(axis_x))
+    else:
+        jq_login_svc = get_joinquant_login_service(account_manager)
+        return await jq_login_svc.validate_captcha(user["id"], "joinquant", int(axis_x))
+
+@router.post("/joinquant/captcha/refresh")
+async def captcha_refresh(data: dict, user: dict = Depends(get_current_user)):
+    raise HTTPException(501, "Refresh is handled within validate response")
 
 _DATA_DIR = Path("/app/data")
 _POSTS_CACHE_FILE = _DATA_DIR / "posts_cache.json"
@@ -129,11 +118,13 @@ async def create_post(platform: str, req: dict, user: dict = Depends(get_current
     if not content:
         raise HTTPException(400, "content is required")
     if platform == "joinquant":
-        return await jq_post_service.create_post(
+        return await jq_post_service.start_post(
             user_id=user["id"],
             content=content,
             title=title,
             platform=platform,
+            image_path=image_path,
+            image_url=image_url,
         )
     return await post_service.create_post(
         user_id=user["id"],

@@ -1,4 +1,5 @@
-const BASE = window.location.pathname.startsWith('/op') ? '/op' : '';
+const pathname = window.location.pathname;
+const BASE = pathname.startsWith('/op') ? '/op' : pathname.startsWith('/smab') ? '/smab' : '';
 
 async function post<T>(path: string, body?: unknown, token?: string): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -121,12 +122,12 @@ export const platformApi = {
   cancelLogin: (platform: string, token: string) =>
     post<{ status: string }>(`/api/platform/${platform}/login/cancel`, undefined, token),
 
-  validateLoginCaptcha: (token: string, axisX: number) =>
-    post<{ status: string; error?: string; cookie_count?: number; captcha_data?: any; message?: string }>(
-      '/api/platform/joinquant/login/captcha-validate', { axisX }, token),
+  validateCaptcha: (token: string, axisX: number, sessionType: 'login' | 'post') =>
+    post<{ status: string; success?: boolean; error?: string; cookie_count?: number; captcha_data?: any; message?: string; post_id?: string }>(
+      '/api/platform/joinquant/captcha/validate', { axisX, sessionType }, token),
 
   createPost: (platform: string, content: string, token: string, imageUrl?: string, imagePath?: string, title?: string) =>
-    post<{ success: boolean; message?: string; url?: string; error?: string; post_id?: string }>(
+    post<{ success: boolean; status?: string; message?: string; url?: string; error?: string; post_id?: string; captcha_data?: any }>(
       `/api/platform/${platform}/post`,
       { content, image_url: imageUrl, image_path: imagePath, title },
       token,

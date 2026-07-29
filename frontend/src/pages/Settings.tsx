@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { platformApi, type PlatformAccount } from '../api/client';
+import SlidingCaptcha from '../components/SlidingCaptcha';
 
 interface PlatformInfo {
   id: string;
@@ -37,36 +38,7 @@ export default function Settings({ token, accounts, onAccountsRefresh }: Props) 
     point: number[];
     axisY: number;
   } | null>(null);
-  const [processedPiece, setProcessedPiece] = useState<string | null>(null);
-  const [captchaDragX, setCaptchaDragX] = useState(0);
-  const [captchaDragging, setCaptchaDragging] = useState(false);
-
-  useEffect(() => {
-    if (!captchaData) {
-      setProcessedPiece(null);
-      return;
-    }
-    const { hqImg } = captchaData;
-    const pieceImg = new Image();
-    pieceImg.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = pieceImg.width;
-      canvas.height = pieceImg.height;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(pieceImg, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imageData.data;
-      for (let j = 0; j < data.length; j += 4) {
-        const brightness = (data[j] + data[j + 1] + data[j + 2]) / 3;
-        if (brightness < 40) {
-          data[j + 3] = 0;
-        }
-      }
-      ctx.putImageData(imageData, 0, 0);
-      setProcessedPiece(canvas.toDataURL());
-    };
-    pieceImg.src = hqImg;
-  }, [captchaData]);
+  const [captchaLoading, setCaptchaLoading] = useState(false);
 
   function getAccountStatus(platform: string): PlatformAccount | undefined {
     return accounts.find(a => a.platform === platform);
@@ -96,7 +68,6 @@ export default function Settings({ token, accounts, onAccountsRefresh }: Props) 
         pollLoginStatus();
       } else if (resp.status === 'captcha_required' && resp.captcha_data) {
         setCaptchaData(resp.captcha_data);
-        setCaptchaDragX(0);
         setLoginMsg(resp.message || 'Please solve the CAPTCHA');
       } else if (resp.status === 'success') {
         setLoginMsg(`Login success! ${resp.message || ''}`);
@@ -155,11 +126,12 @@ export default function Settings({ token, accounts, onAccountsRefresh }: Props) 
     setLoginMsg('');
   }
 
-  async function handleCaptchaValidate() {
+  async function handleCaptchaSubmit(axisX: number) {
     if (!captchaData) return;
+    setCaptchaLoading(true);
     setLoginMsg('Validating CAPTCHA...');
     try {
-      const resp = await platformApi.validateLoginCaptcha(token, captchaDragX);
+      const resp = await platformApi.validateCaptcha(token, axisX, 'login');
       if (resp.status === 'success') {
         setCaptchaData(null);
         setLoginMsg(`Login success! ${resp.cookie_count} cookies saved`);
@@ -168,7 +140,6 @@ export default function Settings({ token, accounts, onAccountsRefresh }: Props) 
       } else if (resp.status === 'captcha_required') {
         if (resp.captcha_data) {
           setCaptchaData(resp.captcha_data);
-          setCaptchaDragX(0);
         }
         setLoginMsg(resp.message || 'CAPTCHA failed, please try again');
       } else if (resp.status === 'error') {
@@ -178,6 +149,8 @@ export default function Settings({ token, accounts, onAccountsRefresh }: Props) 
       }
     } catch (err: unknown) {
       setLoginMsg(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setCaptchaLoading(false);
     }
   }
 
@@ -226,65 +199,19 @@ export default function Settings({ token, accounts, onAccountsRefresh }: Props) 
           </div>
           <div className="login-body">
             {captchaData ? (
-              <div className="captcha-area">
-                <p className="captcha-hint">{loginMsg || 'Drag the puzzle piece to the correct position'}</p>
-                <div className="captcha-container" style={{ position: 'relative', display: 'inline-block' }}>
-                  <img
-                    src={captchaData.bgImg}
-                    alt="CAPTCHA background"
-                    className="captcha-bg"
-                    draggable={false}
-                  />
-                  <img
-                    src={processedPiece || captchaData.hqImg}
-                    alt="CAPTCHA piece"
-                    className="captcha-piece"
-                    draggable={false}
-                    style={{
-                      position: 'absolute',
-                      left: captchaDragX,
-                      top: captchaData.axisY || 0,
-                    }}
-                  />
-                </div>
-                <div className="captcha-slider" style={{ width: captchaData.bgImgW }}>
-                  <div className="captcha-slider-track">
-                    <div
-                      className="captcha-slider-handle"
-                      style={{ left: captchaDragX }}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setCaptchaDragging(true);
-                        const startX = e.clientX;
-                        const startDragX = captchaDragX;
-                        const maxDrag = captchaData.bgImgW - 56;
-
-                        const onMouseMove = (ev: MouseEvent) => {
-                          const dx = ev.clientX - startX;
-                          setCaptchaDragX(Math.max(0, Math.min(maxDrag, startDragX + dx)));
-                        };
-                        const onMouseUp = () => {
-                          setCaptchaDragging(false);
-                          document.removeEventListener('mousemove', onMouseMove);
-                          document.removeEventListener('mouseup', onMouseUp);
-                        };
-                        document.addEventListener('mousemove', onMouseMove);
-                        document.addEventListener('mouseup', onMouseUp);
-                      }}
-                    />
-                  </div>
-                </div>
-                <div className="captcha-actions">
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleCaptchaValidate}
-                    disabled={captchaDragging || captchaDragX === 0}
-                  >
-                    Submit
-                  </button>
-                  <button className="btn btn-outline" onClick={handleCancelLogin}>Cancel</button>
-                </div>
-              </div>
+              <SlidingCaptcha
+                bgImg={captchaData.bgImg}
+                hqImg={captchaData.hqImg}
+                bgImgW={captchaData.bgImgW}
+                bgImgH={captchaData.bgImgH}
+                axisY={captchaData.axisY}
+                onSubmit={handleCaptchaSubmit}
+                onCancel={handleCancelLogin}
+                loading={captchaLoading}
+                message={loginMsg || undefined}
+                variant="inline"
+                removeDarkPixels
+              />
             ) : qrImage ? (
               <div className="qr-area">
                 <img src={qrImage} alt="QR Code" className="qr-image" />

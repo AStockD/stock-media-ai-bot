@@ -246,7 +246,7 @@ async def solve_sliding_captcha(page, slider_selector: str = None) -> bool:
             captcha_data = captcha_data_holder.get("data")
             if not captcha_data:
                 logger.warning("No CAPTCHA data from API, trying DOM extraction...")
-                captcha_data = await page.evaluate("""() => {
+                captcha_data = await page.evaluate(r"""() => {
                     const items = document.querySelectorAll('.valid-code__div-item');
                     if (items.length === 0) return null;
                     const firstBg = items[0].style.backgroundImage;
