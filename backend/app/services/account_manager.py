@@ -39,30 +39,74 @@ class AccountManager:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT id, platform, account_name, cookies_json, storage_state_json, "
-                    "is_valid, last_updated FROM platform_accounts "
+                    "credentials_json, is_valid, last_updated FROM platform_accounts "
                     "WHERE user_id = %s AND platform = %s",
                     (user_id, platform),
                 )
                 return cur.fetchone()
 
+    def get_credentials(self, user_id: int, platform: str) -> Optional[dict]:
+        account = self.get_account(user_id, platform)
+        if not account or not account.get("credentials_json"):
+            return None
+        try:
+            return json.loads(account["credentials_json"])
+        except Exception:
+            return None
+
     def save_cookies(self, user_id: int, platform: str, cookies: dict,
-                     storage_state: dict, account_name: Optional[str] = None):
+                     storage_state: dict, account_name: Optional[str] = None,
+                     credentials: Optional[dict] = None):
+        cookies_json = json.dumps(cookies, ensure_ascii=False)
+        storage_state_json = json.dumps(storage_state, ensure_ascii=False)
+        credentials_json = json.dumps(credentials, ensure_ascii=False) if credentials else None
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                if credentials_json:
+                    cur.execute(
+                        "INSERT INTO platform_accounts "
+                        "(user_id, platform, account_name, cookies_json, storage_state_json, credentials_json, is_valid) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, TRUE) "
+                        "ON DUPLICATE KEY UPDATE "
+                        "cookies_json = VALUES(cookies_json), "
+                        "storage_state_json = VALUES(storage_state_json), "
+                        "credentials_json = VALUES(credentials_json), "
+                        "is_valid = TRUE, "
+                        "account_name = COALESCE(VALUES(account_name), account_name)",
+                        (user_id, platform, account_name, cookies_json, storage_state_json, credentials_json),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO platform_accounts "
+                        "(user_id, platform, account_name, cookies_json, storage_state_json, is_valid) "
+                        "VALUES (%s, %s, %s, %s, %s, TRUE) "
+                        "ON DUPLICATE KEY UPDATE "
+                        "cookies_json = VALUES(cookies_json), "
+                        "storage_state_json = VALUES(storage_state_json), "
+                        "is_valid = TRUE, "
+                        "account_name = COALESCE(VALUES(account_name), account_name)",
+                        (user_id, platform, account_name, cookies_json, storage_state_json),
+                    )
+        logger.info(f"Saved cookies for user={user_id} platform={platform}")
+
+    def save_cookies_and_credentials(self, user_id: int, platform: str, cookies: dict,
+                                     storage_state: dict, account_name: Optional[str],
+                                     credentials: dict):
+        self.save_cookies(user_id, platform, cookies, storage_state, account_name, credentials)
+
+    def update_cookies(self, user_id: int, platform: str, cookies: dict,
+                       storage_state: dict):
         cookies_json = json.dumps(cookies, ensure_ascii=False)
         storage_state_json = json.dumps(storage_state, ensure_ascii=False)
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO platform_accounts "
-                    "(user_id, platform, account_name, cookies_json, storage_state_json, is_valid) "
-                    "VALUES (%s, %s, %s, %s, %s, TRUE) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "cookies_json = VALUES(cookies_json), "
-                    "storage_state_json = VALUES(storage_state_json), "
-                    "is_valid = TRUE, "
-                    "account_name = COALESCE(VALUES(account_name), account_name)",
-                    (user_id, platform, account_name, cookies_json, storage_state_json),
+                    "UPDATE platform_accounts SET cookies_json = %s, "
+                    "storage_state_json = %s, is_valid = TRUE "
+                    "WHERE user_id = %s AND platform = %s",
+                    (cookies_json, storage_state_json, user_id, platform),
                 )
-        logger.info(f"Saved cookies for user={user_id} platform={platform}")
+        logger.info(f"Updated cookies for user={user_id} platform={platform}")
 
     def get_cookie_string(self, user_id: int, platform: str) -> Optional[str]:
         account = self.get_account(user_id, platform)

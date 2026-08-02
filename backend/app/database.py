@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
   account_name VARCHAR(100),
   cookies_json TEXT,
   storage_state_json LONGTEXT,
+  credentials_json TEXT,
   is_valid BOOLEAN DEFAULT FALSE,
   last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -67,6 +68,16 @@ def init_db():
                 stmt = stmt.strip()
                 if stmt:
                     cur.execute(stmt)
+
+            cur.execute(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_NAME = 'platform_accounts' AND COLUMN_NAME = 'credentials_json'"
+            )
+            if not cur.fetchone():
+                cur.execute(
+                    "ALTER TABLE platform_accounts ADD COLUMN credentials_json TEXT"
+                )
+                logger.info("Migrated: added credentials_json column to platform_accounts")
     logger.info("Database tables initialized")
 
 

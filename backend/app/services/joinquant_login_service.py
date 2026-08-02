@@ -36,6 +36,8 @@ class LoginSession:
     page: object = None
     context: object = None
     captcha_data: Optional[dict] = field(default=None)
+    username: str = ""
+    password: str = ""
 
 
 _sessions: Dict[str, LoginSession] = {}
@@ -75,7 +77,8 @@ class JoinQuantLoginService:
                 existing.task.cancel()
             await self._cleanup_session(existing)
 
-        session = LoginSession(user_id=user_id, platform=platform)
+        session = LoginSession(user_id=user_id, platform=platform,
+                               username=username, password=password)
         _sessions[key] = session
 
         try:
@@ -200,6 +203,7 @@ class JoinQuantLoginService:
                 cookies=cookies_dict,
                 storage_state=storage_state,
                 account_name=account_name,
+                credentials={"username": username, "password": password},
             )
 
             await self._cleanup_session(session)
@@ -312,6 +316,7 @@ class JoinQuantLoginService:
                 cookies=cookies_dict,
                 storage_state=storage_state,
                 account_name=account_name,
+                credentials={"username": session.username, "password": session.password},
             )
 
             await self._cleanup_session(session)
