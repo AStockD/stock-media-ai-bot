@@ -146,6 +146,7 @@ class XueqiuLoginService:
         try:
             max_wait = 120
             modal_was_visible = False
+            last_reload_check = 0
 
             for i in range(max_wait):
                 try:
@@ -160,30 +161,49 @@ class XueqiuLoginService:
                     return
 
                 try:
-                    login_btn = await session.page.query_selector("text=立即登录/注册")
-                    if login_btn:
-                        btn_visible = await login_btn.is_visible()
-                        if not btn_visible and i > 3:
-                            await self._save_login(session)
-                            return
-                    else:
-                        if i > 3:
-                            await self._save_login(session)
-                            return
-                except Exception:
-                    pass
-
-                try:
                     modal = await session.page.query_selector('[class*="newLogin_modal"]')
                     if modal:
                         is_visible = await modal.is_visible()
                         if is_visible:
                             modal_was_visible = True
                         elif modal_was_visible and i > 3:
+                            logger.info(f"Login modal hidden (visible->hidden) for user={session.user_id} at {i}s")
                             await self._save_login(session)
                             return
-                except Exception:
-                    pass
+                    elif modal_was_visible and i > 3:
+                        logger.info(f"Login modal disappeared (element removed) for user={session.user_id} at {i}s")
+                        await self._save_login(session)
+                        return
+                except Exception as e:
+                    logger.debug(f"Modal check error at {i}s: {e}")
+
+                if i > 5 and i - last_reload_check >= 15:
+                    last_reload_check = i
+                    try:
+                        await session.page.reload(wait_until="domcontentloaded", timeout=15000)
+                        await session.page.wait_for_timeout(3000)
+
+                        logged_in = await self._check_logged_in(session)
+                        if logged_in:
+                            logger.info(f"Login detected after reload for user={session.user_id} at {i}s")
+                            await self._save_login(session)
+                            return
+
+                        modal_after_reload = await session.page.query_selector('[class*="newLogin_modal"]')
+                        if modal_after_reload:
+                            is_vis = await modal_after_reload.is_visible()
+                            if not is_vis and modal_was_visible:
+                                logger.info(f"Login modal not visible after reload for user={session.user_id} at {i}s")
+                                await self._save_login(session)
+                                return
+                        elif modal_was_visible:
+                            logger.info(f"Login modal absent after reload for user={session.user_id} at {i}s")
+                            await self._save_login(session)
+                            return
+
+                        logger.debug(f"Reload check at {i}s: still not logged in, URL={session.page.url}")
+                    except Exception as e:
+                        logger.debug(f"Reload check error at {i}s: {e}")
 
                 if i % 10 == 0:
                     logger.info(f"Waiting for login... user={session.user_id} ({i}s)")
@@ -201,6 +221,34 @@ class XueqiuLoginService:
             except Exception:
                 pass
             session.last_result = {"status": "error", "error": str(e)}
+
+    async def _check_logged_in(self, session: LoginSession) -> bool:
+        try:
+            cookies = await session.page.context.cookies()
+            cookie_names = {c["name"] for c in cookies}
+            login_tokens = {"u", "xq_a_token", "xq_at", "xq_id_token"}
+            if login_tokens & cookie_names:
+                logger.info(f"Login cookie found: {login_tokens & cookie_names}")
+                return True
+        except Exception:
+            pass
+
+        try:
+            has_user_link = await session.page.evaluate("""() => {
+                const links = document.querySelectorAll('a.user-name, a[href*="/u/"]');
+                for (const a of links) {
+                    const text = a.textContent.trim();
+                    if (text && text.length > 0 && text.length < 50) return true;
+                }
+                return false;
+            }""")
+            if has_user_link:
+                logger.info("User link found in page DOM")
+                return True
+        except Exception:
+            pass
+
+        return False
 
     async def _save_login(self, session: LoginSession):
         logger.info(f"Login successful for user={session.user_id}")
