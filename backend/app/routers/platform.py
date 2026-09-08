@@ -15,6 +15,9 @@ from app.services.xueqiu_comment_service import XueqiuCommentService
 from app.services.joinquant_login_service import get_joinquant_login_service
 from app.services.joinquant_comment_service import JoinQuantCommentService
 from app.services.joinquant_post_service import JoinQuantPostService
+from app.services.zsxq_login_service import get_zsxq_login_service
+from app.services.zsxq_post_service import ZsxqPostService
+from app.services.zsxq_comment_service import ZsxqCommentService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/platform", tags=["platform"])
@@ -23,6 +26,8 @@ post_service = XueqiuPostService(account_manager)
 comment_service = XueqiuCommentService(account_manager)
 jq_comment_service = JoinQuantCommentService(account_manager)
 jq_post_service = JoinQuantPostService(account_manager)
+zsxq_post_service = ZsxqPostService(account_manager)
+zsxq_comment_service = ZsxqCommentService(account_manager)
 
 @router.post("/joinquant/captcha/validate")
 async def captcha_validate(data: dict, user: dict = Depends(get_current_user)):
@@ -66,6 +71,23 @@ async def list_accounts(user: dict = Depends(get_current_user)):
     return {"accounts": accounts}
 
 
+@router.get("/zsxq/groups")
+async def zsxq_groups(user: dict = Depends(get_current_user)):
+    zsxq_login = get_zsxq_login_service(account_manager)
+    return await zsxq_login.list_groups(user["id"])
+
+
+@router.post("/zsxq/group")
+async def zsxq_set_group(req: dict, user: dict = Depends(get_current_user)):
+    group_id = str(req.get("group_id") or "").strip()
+    if not group_id:
+        raise HTTPException(400, "group_id required")
+    zsxq_login = get_zsxq_login_service(account_manager)
+    return await zsxq_login.set_group(
+        user["id"], group_id, group_name=str(req.get("group_name") or "")
+    )
+
+
 @router.post("/{platform}/login/start")
 async def start_login(platform: str, req: dict = {}, user: dict = Depends(get_current_user)):
     if platform == "joinquant":
@@ -73,6 +95,10 @@ async def start_login(platform: str, req: dict = {}, user: dict = Depends(get_cu
         username = req.get("username", "")
         password = req.get("password", "")
         return await jq_login_svc.start_login(user["id"], platform, username=username, password=password)
+
+    if platform == "zsxq":
+        zsxq_login = get_zsxq_login_service(account_manager)
+        return await zsxq_login.start_login(user["id"], platform)
 
     login_svc = get_login_service(account_manager)
     result = await login_svc.start_login(user["id"], platform)
@@ -96,6 +122,9 @@ async def login_status(platform: str, user: dict = Depends(get_current_user)):
     if platform == "joinquant":
         jq_login_svc = get_joinquant_login_service(account_manager)
         return await jq_login_svc.get_status(user["id"], platform)
+    if platform == "zsxq":
+        zsxq_login = get_zsxq_login_service(account_manager)
+        return await zsxq_login.get_status(user["id"], platform)
     login_svc = get_login_service(account_manager)
     return await login_svc.get_status(user["id"], platform)
 
@@ -105,6 +134,9 @@ async def cancel_login(platform: str, user: dict = Depends(get_current_user)):
     if platform == "joinquant":
         jq_login_svc = get_joinquant_login_service(account_manager)
         return await jq_login_svc.cancel_login(user["id"], platform)
+    if platform == "zsxq":
+        zsxq_login = get_zsxq_login_service(account_manager)
+        return await zsxq_login.cancel_login(user["id"], platform)
     login_svc = get_login_service(account_manager)
     return await login_svc.cancel_login(user["id"], platform)
 
@@ -125,6 +157,15 @@ async def create_post(platform: str, req: dict, user: dict = Depends(get_current
             platform=platform,
             image_path=image_path,
             image_url=image_url,
+        )
+    if platform == "zsxq":
+        return await zsxq_post_service.create_post(
+            user_id=user["id"],
+            content=content,
+            image_path=image_path,
+            image_url=image_url,
+            title=title,
+            platform=platform,
         )
     return await post_service.create_post(
         user_id=user["id"],
@@ -243,8 +284,15 @@ async def list_posts(
     refresh: int = Query(0, description="Set to 1 to force refresh"),
     user: dict = Depends(get_current_user),
 ):
+    if platform == "zsxq":
+        data = await zsxq_comment_service.list_posts(user["id"])
+        return {
+            **data,
+            "cached_at": datetime.now(tz=timezone.utc).isoformat(),
+        }
+
     if platform != "xueqiu":
-        raise HTTPException(400, "Only xueqiu platform is supported")
+        raise HTTPException(400, "Only xueqiu/zsxq platforms are supported for posts list")
 
     uid = user["id"]
     now = time.time()
@@ -282,6 +330,19 @@ async def create_comment(platform: str, req: dict, user: dict = Depends(get_curr
             content=content,
             platform=platform,
             post_id=str(post_id) if post_id else None,
+            post_title=post_title,
+        )
+
+    if platform == "zsxq":
+        if not content:
+            raise HTTPException(400, "content is required")
+        return await zsxq_comment_service.create_comment(
+            user_id=user["id"],
+            content=content,
+            post_id=str(post_id) if post_id else None,
+            post_url=post_url,
+            platform=platform,
+            reply_to_comment_id=str(reply_to_comment_id) if reply_to_comment_id else None,
             post_title=post_title,
         )
 

@@ -44,3 +44,6 @@ LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
 
 POSTER_CACHE_DIR = DATA_DIR / "poster_cache"
 POSTER_CACHE_DIR.mkdir(exist_ok=True)
+
+ZSXQ_CLI_PATH = os.getenv("ZSXQ_CLI_PATH", "")
+ZSXQ_DEFAULT_GROUP_ID = os.getenv("ZSXQ_DEFAULT_GROUP_ID", "")

@@ -12,7 +12,7 @@ from app.services.heartbeat import start_heartbeat
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Stock Media AI Bot", version="0.2.0")
+app = FastAPI(title="Stock Media AI Bot", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,

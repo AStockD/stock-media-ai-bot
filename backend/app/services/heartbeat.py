@@ -33,6 +33,20 @@ window.chrome = { runtime: {} };
 """
 
 
+def _check_zsxq(user_id: int) -> bool:
+    try:
+        from app.services.zsxq_cli import ZsxqCliError, run_cli, unwrap_data
+
+        result = run_cli(user_id, ["auth", "status"], timeout=30)
+        data = unwrap_data(result) or {}
+        if isinstance(data, dict) and data.get("loggedIn") is False:
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"Zsxq heartbeat failed: user={user_id}: {e}")
+        return False
+
+
 def _check_xueqiu(cookies: dict) -> bool:
     cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
     try:
@@ -242,6 +256,19 @@ def _run_check():
                             "UPDATE platform_accounts SET is_valid = 0 WHERE id = %s",
                             (acc["id"],),
                         )
+
+        elif platform == "zsxq":
+            valid = _check_zsxq(acc["user_id"])
+            if not valid:
+                logger.warning(f"Heartbeat FAILED: user={acc['user_id']} platform={platform}")
+                with get_db() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE platform_accounts SET is_valid = 0 WHERE id = %s",
+                            (acc["id"],),
+                        )
+            else:
+                logger.info(f"Heartbeat OK: user={acc['user_id']} platform={platform}")
         else:
             continue
 

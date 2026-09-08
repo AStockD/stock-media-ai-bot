@@ -58,6 +58,10 @@ export interface LoginStartResponse {
   qr_image?: string;
   message?: string;
   error?: string;
+  verification_uri?: string;
+  user_code?: string;
+  groups?: ZsxqGroup[];
+  group_id?: string;
   captcha_data?: {
     bgImg: string;
     hqImg: string;
@@ -75,6 +79,16 @@ export interface LoginStatusResponse {
   cookie_count?: number;
   message?: string;
   error?: string;
+  verification_uri?: string;
+  user_code?: string;
+  groups?: ZsxqGroup[];
+  group_id?: string;
+  account_name?: string;
+}
+
+export interface ZsxqGroup {
+  group_id: string;
+  name: string;
 }
 
 export interface Strategy {
@@ -139,10 +153,20 @@ export const platformApi = {
       token,
     ),
 
-  createComment: (platform: string, content: string, token: string, postId?: number, postUrl?: string, postTitle?: string) =>
+  createComment: (platform: string, content: string, token: string, postId?: number | string, postUrl?: string, postTitle?: string) =>
     post<{ success: boolean; message?: string; error?: string }>(
       `/api/platform/${platform}/comment`,
       { post_id: postId, post_url: postUrl, post_title: postTitle, content },
+      token,
+    ),
+
+  getZsxqGroups: (token: string) =>
+    get<{ groups: ZsxqGroup[]; error?: string }>('/api/platform/zsxq/groups', token),
+
+  setZsxqGroup: (token: string, groupId: string, groupName?: string) =>
+    post<{ success: boolean; group_id?: string; group_name?: string; error?: string }>(
+      '/api/platform/zsxq/group',
+      { group_id: groupId, group_name: groupName },
       token,
     ),
 };

@@ -13,6 +13,7 @@ interface PlatformInfo {
 const PLATFORMS: PlatformInfo[] = [
   { id: 'xueqiu', name: '雪球', icon: '❄️', color: '#2196F3' },
   { id: 'joinquant', name: '聚宽', icon: '📊', color: '#4CAF50' },
+  { id: 'zsxq', name: '知识星球', icon: '🪐', color: '#7B68EE' },
 ];
 
 interface Props {
@@ -526,6 +527,7 @@ export default function PostManagement({ token }: Props) {
                   <span className="pc-icon">{p.icon}</span>
                   <span className="pc-name">{p.name}</span>
                   {p.id === 'joinquant' && <span className="pc-badge">发帖/评论</span>}
+                  {p.id === 'zsxq' && <span className="pc-badge">OAuth发帖</span>}
                 </label>
               );
             })}

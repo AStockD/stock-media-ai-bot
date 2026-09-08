@@ -5,7 +5,13 @@ interface Props {
   token: string;
 }
 
+const LIST_PLATFORMS = [
+  { id: 'xueqiu', name: '雪球' },
+  { id: 'zsxq', name: '知识星球' },
+] as const;
+
 export default function MyPosts({ token }: Props) {
+  const [platform, setPlatform] = useState<'xueqiu' | 'zsxq'>('xueqiu');
   const [posts, setPosts] = useState<PostHistory[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -16,7 +22,7 @@ export default function MyPosts({ token }: Props) {
   const [commentLoading, setCommentLoading] = useState(false);
   const [commentResult, setCommentResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  async function fetchPosts(refresh = false) {
+  async function fetchPosts(refresh = false, plat: 'xueqiu' | 'zsxq' = platform) {
     if (refresh) {
       setRefreshing(true);
     } else {
@@ -24,7 +30,7 @@ export default function MyPosts({ token }: Props) {
     }
     setError('');
     try {
-      const resp = await platformApi.getPosts('xueqiu', token, refresh);
+      const resp = await platformApi.getPosts(plat, token, refresh);
       setPosts(resp.posts);
       if (resp.cached_at) {
         setCachedAt(resp.cached_at);
@@ -41,15 +47,25 @@ export default function MyPosts({ token }: Props) {
   }
 
   useEffect(() => {
-    fetchPosts();
-  }, [token]);
+    setCommentPostId(null);
+    setCommentContent('');
+    setCommentResult(null);
+    fetchPosts(false, platform);
+  }, [token, platform]);
 
   async function handleCommentSubmit(post: PostHistory) {
     if (!commentContent.trim()) return;
     setCommentLoading(true);
     setCommentResult(null);
     try {
-      const resp = await platformApi.createComment('xueqiu', commentContent, token, undefined, post.url || undefined, post.title || undefined);
+      const resp = await platformApi.createComment(
+        platform,
+        commentContent,
+        token,
+        post.post_id,
+        post.url || undefined,
+        post.title || undefined,
+      );
       setCommentResult({
         success: resp.success,
         message: resp.success ? (resp.message || '评论成功') : (resp.error || '评论失败'),
@@ -81,7 +97,17 @@ export default function MyPosts({ token }: Props) {
   return (
     <div className="my-posts-page">
       <div className="my-posts-header">
-        <div className="my-posts-info">
+        <div className="my-posts-info" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {LIST_PLATFORMS.map(p => (
+            <button
+              key={p.id}
+              className={`btn-outline ${platform === p.id ? 'btn-primary' : ''}`}
+              onClick={() => setPlatform(p.id)}
+              style={{ padding: '4px 10px' }}
+            >
+              {p.name}
+            </button>
+          ))}
           {cachedAt && (
             <span className="cache-hint">
               更新于 {formatCachedAt(cachedAt)}

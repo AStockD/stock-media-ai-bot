@@ -4,15 +4,19 @@ WORKDIR /app
 
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
-    wget libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    wget curl ca-certificates gnupg \
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
     libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 \
     libgbm1 libpango-1.0-0 libcairo2 libasound2 libxshmfence1 \
     libxfixes3 \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt
 RUN playwright install chromium
+RUN npm install -g zsxq-cli@0.5.1
 
 COPY . .
 
